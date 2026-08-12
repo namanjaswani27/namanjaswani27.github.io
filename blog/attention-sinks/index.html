@@ -1,0 +1,979 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attention Sinks: the softmax has no off switch</title>
+<meta name="description" content="Every attention row has to sum to one. When a head has nothing worth attending to it still has to put that weight somewhere, so the model builds itself a drain.">
+<meta name="author" content="Naman Jaswani">
+<meta name="theme-color" content="#fdf6e3">
+<link rel="canonical" href="https://namanjaswani27.github.io/blog/attention-sinks/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Attention Sinks: the softmax has no off switch">
+<meta property="og:description" content="Every attention row has to sum to one. When a head has nothing worth attending to it still has to put that weight somewhere, so the model builds itself a drain.">
+<meta property="og:url" content="https://namanjaswani27.github.io/blog/attention-sinks/">
+<meta property="article:published_time" content="2026-08-13">
+<meta name="twitter:card" content="summary">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.css" integrity="sha384-u1zONI5gPXUx0UKI62c75/zww972y0v2rSK5ZYlVdS6xEuWDeZWUI66v6t1gvlXJ" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.js" integrity="sha384-ykMNcWQhhTUb0YV9SPpPUFURHZ+tWmubkakGBP+OgNK/UXdO2gtzglWx0Rj9hnO3" crossorigin="anonymous"></script>
+
+<style>
+:root{
+  /* Solarized Light, by Ethan Schoonover */
+  --base3:#fdf6e3; --base2:#eee8d5; --base1:#93a1a1; --base0:#839496;
+  --base00:#657b83; --base01:#586e75; --base02:#073642; --base03:#002b36;
+  --yellow:#b58900; --orange:#cb4b16; --red:#dc322f; --magenta:#d33682;
+  --violet:#6c71c4; --blue:#268bd2; --cyan:#2aa198; --green:#859900;
+
+  --sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+
+  --measure:68ch;
+  --hair:#e2dbc5;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--base3); color:var(--base00);
+  font-family:var(--sans); font-size:17.5px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:#e4e9d6}
+
+/* ---------- chrome ---------- */
+.bar{
+  position:sticky; top:0; z-index:50;
+  display:flex; gap:.75rem; align-items:center; flex-wrap:wrap;
+  padding:.6rem clamp(1rem,5vw,3rem);
+  background:rgba(253,246,227,.94); backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--hair);
+  font-family:var(--mono); font-size:11.5px; color:var(--base1);
+}
+.bar b{color:var(--base01); font-weight:500}
+.bar .spacer{flex:1}
+.bar a{color:var(--base01); text-decoration:none}
+.bar a:hover{color:var(--blue)}
+
+.wrap{max-width:var(--measure); margin:0 auto; padding:0 clamp(1rem,5vw,2rem)}
+.wide{max-width:min(1100px,94vw); margin:0 auto; padding:0 clamp(1rem,4vw,2rem)}
+
+/* ---------- hero ---------- */
+header.hero{padding:clamp(2.6rem,8vh,5rem) 0 1.4rem}
+.eyebrow{
+  font-family:var(--mono); font-size:11.5px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--base1); margin:0 0 1.2rem;
+}
+h1{
+  font-family:var(--sans); font-weight:600;
+  font-size:clamp(1.85rem,5.2vw,2.85rem); line-height:1.12;
+  letter-spacing:-.028em; color:var(--base01); margin:0 0 .9rem;
+}
+h1 em{font-style:normal; color:var(--blue)}
+.deck{
+  font-size:clamp(1.05rem,2.3vw,1.22rem); line-height:1.5; font-weight:400;
+  color:var(--base00); max-width:52ch; margin:0 0 1.6rem;
+}
+.meta{
+  font-family:var(--mono); font-size:11.5px; color:var(--base1);
+  display:flex; gap:.5rem 1rem; flex-wrap:wrap; align-items:center;
+  padding-top:1rem; border-top:1px solid var(--hair);
+}
+.tag{color:var(--cyan)}
+
+/* ---------- body type ---------- */
+main{padding-bottom:5rem}
+h2{
+  font-family:var(--sans); font-weight:600; font-size:1.16rem;
+  letter-spacing:-.015em; color:var(--base01);
+  margin:3.4rem 0 1rem; padding-top:1.1rem;
+  border-top:1px solid var(--hair); scroll-margin-top:4rem;
+}
+h3{
+  font-family:var(--sans); font-weight:600; font-size:1rem;
+  letter-spacing:-.01em; color:var(--base01); margin:2.2rem 0 .6rem;
+}
+p{margin:0 0 1.1rem}
+.lede{font-size:1.06em; color:var(--base01)}
+a{color:var(--blue); text-decoration-thickness:1px; text-underline-offset:2px}
+a:hover{color:var(--cyan)}
+strong{color:var(--base01); font-weight:600}
+em{font-style:italic}
+code{
+  font-family:var(--mono); font-size:.85em; color:var(--base01);
+  background:var(--base2); padding:.08em .3em; border-radius:2px;
+}
+ul,ol{margin:0 0 1.1rem; padding-left:1.35rem}
+li{margin:.32rem 0}
+li::marker{color:var(--base1)}
+hr{border:0; border-top:1px solid var(--hair); margin:2.6rem 0}
+
+.contents{
+  font-family:var(--mono); font-size:12.5px; line-height:2;
+  margin:2.2rem 0; padding:0;
+}
+.contents a{color:var(--base00); text-decoration:none; display:block}
+.contents a:hover{color:var(--blue)}
+.contents span{color:var(--base1); margin-right:.7rem}
+
+/* the one recurring rule device, reserved for equations */
+.eq{
+  background:var(--base2); border-left:2px solid var(--blue);
+  padding:1.1rem 1.15rem; margin:1.7rem 0; overflow-x:auto; color:var(--base01);
+}
+.math-d{display:block; font-family:var(--mono); font-size:13px; white-space:pre; line-height:1.85}
+.math{font-family:var(--mono); font-size:.86em; white-space:nowrap}
+.math-d.rendered,.math.rendered{font-family:inherit; white-space:normal; font-size:inherit}
+.katex{color:var(--base01); font-size:1.04em}
+.math.rendered .katex{font-size:1em}
+.katex-display{margin:0; padding:.1rem 0; overflow-x:auto; overflow-y:hidden; text-align:left}
+.katex-display>.katex{display:inline-block; text-align:left; white-space:normal}
+
+/* asides: hairlines and a small label, no tinted panels */
+.note{
+  font-size:.95em; line-height:1.6; color:var(--base00);
+  border-top:1px solid var(--hair); border-bottom:1px solid var(--hair);
+  padding:.95rem 0; margin:1.9rem 0;
+}
+.note b{color:var(--base01); font-weight:600}
+.note>b:first-child{
+  display:block; font-family:var(--mono); font-weight:500;
+  font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--base1); margin-bottom:.4rem;
+}
+
+.srcs{margin:.6rem 0 0; padding-left:1.1rem; font-size:.95em; line-height:1.5}
+.srcs li{margin:.42rem 0}
+.srcs li>span{display:block; color:var(--base1); font-size:.9em}
+
+.pull{
+  font-family:var(--mono); font-weight:500;
+  font-size:clamp(1.15rem,3vw,1.55rem); line-height:1.42;
+  letter-spacing:-.03em; color:var(--base01);
+  max-width:30ch; margin:2.7rem 0;
+}
+.pull em{font-style:normal; color:var(--orange)}
+
+.hint{
+  font-family:var(--mono); font-size:11.5px; line-height:1.55;
+  color:var(--orange); margin:0 0 .85rem;
+  display:flex; gap:.45rem; align-items:baseline;
+}
+.hint::before{content:"\2192"; flex:none}
+
+pre{
+  background:var(--base2); border-radius:2px;
+  padding:1rem 1.05rem; overflow-x:auto; margin:1.6rem 0;
+  font-family:var(--mono); font-size:12.5px; line-height:1.7;
+}
+pre code{background:none; padding:0; font-size:inherit; color:var(--base00)}
+.c-com{color:var(--base1)}
+.c-str{color:var(--cyan)}
+.c-num{color:var(--magenta)}
+.c-kw{color:var(--green)}
+.c-fn{color:var(--blue)}
+
+/* ---------- figures ---------- */
+figure{margin:2.4rem 0}
+.fig{border:1px solid var(--hair); border-radius:2px; background:#fcf7e6;
+     padding:1rem clamp(.75rem,2.4vw,1.25rem) 1.15rem}
+.fig-head{
+  display:flex; gap:.7rem; align-items:baseline; flex-wrap:wrap;
+  font-family:var(--mono); font-size:11px; color:var(--base1);
+  padding-bottom:.85rem; margin-bottom:1rem; border-bottom:1px solid var(--hair);
+}
+.fig-head b{color:var(--base01); font-weight:500}
+figcaption{
+  font-size:.88em; line-height:1.6; color:var(--base1);
+  margin-top:.85rem; max-width:74ch;
+}
+figcaption b{color:var(--base00); font-weight:600}
+
+.controls{display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.9rem}
+button.seg{
+  font-family:var(--mono); font-size:11.5px; color:var(--base00);
+  background:transparent; border:1px solid #d9d1b8; border-radius:2px;
+  padding:.32rem .68rem; cursor:pointer; transition:background .12s,color .12s;
+}
+button.seg:hover{background:var(--base2); color:var(--base01)}
+button.seg[aria-pressed="true"]{background:var(--base01); border-color:var(--base01); color:var(--base3)}
+button.seg:focus-visible,input:focus-visible{outline:2px solid var(--violet); outline-offset:2px}
+.ctl-label{font-family:var(--mono); font-size:11px; color:var(--base1); align-self:center; margin-right:.15rem}
+
+.sliders{display:grid; gap:.3rem}
+.srow{display:grid; grid-template-columns:8ch 1fr 5ch; gap:.65rem; align-items:center;
+      font-family:var(--mono); font-size:11.5px}
+.srow .tk{color:var(--base01); text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.srow .tk.sink{color:var(--orange)}
+.srow output{color:var(--base1); text-align:right; font-variant-numeric:tabular-nums}
+input[type=range]{width:100%; accent-color:var(--base01); height:1.1rem}
+
+.readout{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); gap:.65rem;
+  font-family:var(--mono); margin-top:1rem; padding-top:.9rem; border-top:1px solid var(--hair);
+}
+.stat span{display:block; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--base1)}
+.stat b{font-size:1.2rem; font-weight:500; color:var(--base01); font-variant-numeric:tabular-nums}
+.stat b.hot{color:var(--orange)}
+.stat b.cool{color:var(--blue)}
+.stat i{font-style:normal; font-size:10.5px; color:var(--base1); display:block; line-height:1.4; margin-top:.1rem}
+
+.explain{
+  font-family:var(--mono); font-size:12px; line-height:1.65;
+  color:var(--base00); margin-top:.85rem; padding-top:.75rem;
+  border-top:1px solid var(--hair); min-height:3.6em;
+}
+
+svg{display:block; max-width:100%; height:auto}
+.tt{
+  position:fixed; pointer-events:none; opacity:0; transition:opacity .1s;
+  font-family:var(--mono); font-size:11px; background:var(--base02); color:var(--base3);
+  padding:.28rem .48rem; border-radius:2px; z-index:99; white-space:nowrap;
+}
+
+.cachestrip{display:flex; flex-wrap:wrap; gap:3px; margin:.35rem 0 0}
+.tokbox{
+  font-family:var(--mono); font-size:10px; width:2rem; height:1.6rem;
+  display:grid; place-items:center; border-radius:2px;
+  background:var(--base2); color:#c4bfa9; border:1px solid transparent;
+  transition:background .15s,color .15s;
+}
+.tokbox.win{background:#d7e7f4; color:var(--blue); border-color:#bdd9ed}
+.tokbox.sink{background:#f7e1d2; color:var(--orange); border-color:#eccbb2}
+.tokbox.cur{outline:2px solid var(--violet); outline-offset:1px}
+
+.verdict{
+  font-family:var(--mono); font-size:12px; line-height:1.6;
+  margin-top:.95rem; padding-top:.8rem; border-top:1px solid var(--hair);
+}
+.verdict.bad{color:#a2261f}
+.verdict.good{color:#5f6b1a}
+
+footer a{color:var(--base00)}
+footer{border-top:1px solid var(--hair); padding:1.8rem 0 3.5rem;
+       font-family:var(--mono); font-size:11.5px; color:var(--base1)}
+
+@media (max-width:560px){
+  body{font-size:16.5px}
+  .srow{grid-template-columns:6.5ch 1fr 4.5ch; gap:.45rem}
+  .tokbox{width:1.7rem; height:1.4rem; font-size:9px}
+  .katex{font-size:.96em}
+}
+@media (prefers-reduced-motion:reduce){ *{animation:none!important; transition:none!important} }
+</style>
+
+<div class="bar">
+  <a href="/">namanjaswani27.github.io</a> <span>/</span> <a href="/blog/">blog</a>
+  <span class="spacer"></span>
+  <span>13 Aug 2026</span>
+</div>
+
+<div class="wrap">
+<header class="hero">
+  <p class="eyebrow">Attention internals</p>
+  <h1>Attention Sinks: the softmax has no <em>off switch</em></h1>
+  <p class="deck">Every attention row has to sum to one. When a head has nothing worth attending to it still has to put that weight somewhere, so the model builds itself a drain.</p>
+  <div class="meta">
+    <span>Naman Jaswani</span><span>&middot;</span><span>13 August 2026</span><span>&middot;</span><span>~12 min</span>
+    <span class="tag">softmax</span><span class="tag">KV cache</span><span class="tag">interpretability</span>
+  </div>
+</header>
+</div>
+
+<main>
+<div class="wrap">
+
+<p class="lede">I keep coming back to one experiment because it still feels wrong.</p>
+
+<p>When an LLM generates text, every new token attends to every previous one. Rather than recompute those, you cache each token's key and value vectors. That store is the KV cache, and it grows linearly with the sequence, so on an endless stream it eventually eats all your memory.</p>
+
+<p>The obvious fix is to cap it. Keep, say, the most recent 1024 tokens and evict anything older. Reasonable enough, since attention is mostly local anyway.</p>
+
+<p>Perplexity explodes. Not gracefully: it collapses, and the output turns to gibberish.</p>
+
+<p>That is the part that feels wrong. The window still holds 1024 tokens of perfectly good recent context, and nothing about the local information got worse. The model should be able to predict the next word from the last thousand words, and it cannot.</p>
+
+<p>Now change one thing. Pin positions 0 to 3 in the cache permanently, alongside the sliding window, so the cache holds 4 + 1024 instead of 1024. Quality comes back, and you can stream millions of tokens.</p>
+
+<p>Four tokens. Not four important tokens, just the first four, whatever they happened to be. Position 0 is usually only <code>&lt;BOS&gt;</code>, which carries no content at all. They cannot be supplying information the model needs, because there is no information in them to supply.</p>
+
+<p>So the fix cannot be an information story. It has to be a mechanical one, and that mechanism turns out to matter for KV-cache design, for quantization, for why prompts break when you trim them from the front, and for whether attention maps tell you anything at all.</p>
+
+<nav class="contents">
+  <a href="#mechanism"><span>01</span>Softmax forces a choice</a>
+  <a href="#position"><span>02</span>Why the first token, specifically</a>
+  <a href="#noop"><span>03</span>What a sinking head actually outputs</a>
+  <a href="#fixes"><span>04</span>Three fixes, increasing invasiveness</a>
+  <a href="#practice"><span>05</span>Why practitioners care</a>
+</nav>
+
+<h2 id="mechanism">Softmax forces a choice</h2>
+
+<p>Attention weights come out of a row-wise softmax:</p>
+
+<div class="eq"><span class="math-d" data-tex="a_{ij}\;=\;\frac{\exp\!\left(q_i^{\top}k_j/\sqrt{d}\right)}{\sum_{l}\exp\!\left(q_i^{\top}k_l/\sqrt{d}\right)}\qquad\text{subject to}\qquad\underbrace{\sum_{j}a_{ij}=1}_{\textcolor{#cb4b16}{\text{the whole problem}}}">a[i,j] = exp(q_i &middot; k_j / &radic;d) / &Sigma;_l exp(q_i &middot; k_l / &radic;d)
+
+           &Sigma;_j a[i,j] = 1        &larr; the whole problem</span></div>
+
+<p>The denominator normalises so that each row sums to exactly one. Every query position gets one unit of attention to spend, and it spends all of it.</p>
+
+<p>Now think about what a single head actually does. Heads are specialists. One tracks subject-verb agreement, one copies from an earlier mention of the same entity, one finds the matching open bracket. Being a specialist means being conditional: the head has work to do only when its pattern is present.</p>
+
+<p>So what does an induction head do at a position with nothing to induct from? Under softmax, "nothing" is not on the menu. The row still has to sum to one, so the head has to put its unit of weight somewhere.</p>
+
+<p>That is the whole asymmetry. There is no slot for "none of these". No way to emit a row that sums to 0.3, or 0.03, or nothing at all. A head that has searched the context and found nothing worth reading is not permitted to report that. It is only permitted to say <em>where</em>. Every head, at every position, in every layer, on every forward pass any transformer has ever run, is compelled to point at something and hand over its full unit of weight.</p>
+
+<p class="pull">Attention has no <em>do-not-attend-to-any</em> option.</p>
+
+<p>Nobody ever shipped that flag. So the model went and built one.</p>
+
+<p>Drag the logits below. The case to look at is the flat one, where no key stands out.</p>
+</div>
+
+<div class="wide">
+<figure>
+<div class="fig" id="w1">
+  <div class="fig-head"><b>Figure 1</b> <span>Attention mass allocator: where does the weight go?</span></div>
+
+  <div class="controls" role="group" aria-label="Normalization scheme">
+    <span class="ctl-label">Scheme</span>
+    <button class="seg" data-mode="softmax" aria-pressed="true">softmax</button>
+    <button class="seg" data-mode="plus1" aria-pressed="false">softmax + 1</button>
+    <button class="seg" data-mode="learned" aria-pressed="false">learned sink logit</button>
+    <button class="seg" data-mode="sigmoid" aria-pressed="false">sigmoid</button>
+  </div>
+
+  <div class="controls" role="group" aria-label="Presets">
+    <span class="ctl-label">Preset</span>
+    <button class="seg" data-preset="fires">head fires</button>
+    <button class="seg" data-preset="idle">head idles</button>
+    <button class="seg" data-preset="flat">nothing relevant</button>
+  </div>
+
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:1.6rem 2.2rem; align-items:start">
+    <div>
+      <div class="sliders" id="w1-sliders"></div>
+      <div id="w1-slider-extra" style="margin-top:.6rem"></div>
+    </div>
+    <div><svg id="w1-svg" viewBox="0 0 380 240" role="img" aria-label="Bar chart of attention weight per key"></svg></div>
+  </div>
+
+  <div class="readout">
+    <div class="stat"><span>&Sigma; weight on real keys</span><b id="w1-sum">1.000</b><i id="w1-sumnote">forced to exactly 1</i></div>
+    <div class="stat"><span>weight on sink slot</span><b id="w1-sink" class="hot">0.000</b><i>spent on a content-free token</i></div>
+    <div class="stat"><span>content weight</span><b id="w1-content" class="cool">0.000</b><i>the only token-dependent signal</i></div>
+  </div>
+</div>
+<figcaption><b>Start with the "nothing relevant" preset.</b> Every logit is low and they are all equal, so no key deserves the weight. Softmax hands out a full unit anyway, 16.7% of it to <code>&lt;BOS&gt;</code>. Give <code>&lt;BOS&gt;</code> a large learned key logit instead and softmax puts 99% of the weight there. The other three schemes all let the head keep its weight, which is the whole fix in three flavours.</figcaption>
+</figure>
+</div>
+
+<div class="wrap">
+<h2 id="position">Why the first token, specifically</h2>
+
+<p>Two things make position 0 the obvious parking spot, and both fall out of causal masking.</p>
+
+<ol>
+  <li><strong>Everyone can see it.</strong> With a causal mask, token 0 sits in the receptive field of every query position. It is the only key you can count on being there no matter where you are in the sequence. If a head wants one designated no-op target that always works, there is exactly one candidate.</li>
+  <li><strong>Training reinforces it.</strong> Early on, attention is close to uniform. Early positions have almost nothing to choose from, since token 1 can only look at tokens 0 and 1, so token 0 collects a lot of weight by default and gradient from every downstream position flows back into it. Its key drifts toward a direction that scores well against any query, which makes it a better place to park, which sends more weight its way.</li>
+</ol>
+
+<p>One thing worth being clear about: the sink attaches to the position, not to the token. Put an arbitrary word at index 0 and the sink stays there. Newlines, periods and other high-frequency structural tokens pick up secondary sinks for the same reason, since they are common, content-free and visible from a lot of places. The Qualcomm group put a number on this: over 97% of outlier activations in the models they examined sit on whitespace and punctuation positions.</p>
+
+<p>Figure 2 shows this. Two things first, because attention matrices are easy to misread.</p>
+
+<p><strong>How to read it.</strong> Each row is one token doing the reading. Each column is a token being read from. The cell where they cross is how much of that row's one unit of weight went there. The top right half is blank because a token cannot read the future: token 3 has no access to token 7. That also means row 0 has only one place to look, itself, so it sits at 1.00 no matter what the head would prefer.</p>
+
+<p><strong>What an induction head does.</strong> It spots when something is happening for the second time, and copies what happened the first time.</p>
+
+<p>Suppose the text so far reads <code>Ada Lovelace wrote the first program. Ada Lovelace wrote the</code>. A head sitting on that last <code>the</code> looks back for the earlier <code>the</code>, sees that <code>first</code> came straight after it, and attends to <code>first</code>. Its guess for the next word is <code>first</code>, because that is what followed last time.</p>
+
+<p>That sentence is the sequence in the figure. Said once, then started again.</p>
+</div>
+
+<div class="wide">
+<figure>
+<div class="fig" id="w2">
+  <div class="fig-head"><b>Figure 2</b> <span>One head, twelve tokens: rows are queries, columns are keys</span></div>
+  <div class="controls" role="group" aria-label="Head type">
+    <span class="ctl-label">Head</span>
+    <button class="seg" data-head="induction" aria-pressed="true">induction</button>
+    <button class="seg" data-head="local" aria-pressed="false">previous-token</button>
+    <button class="seg" data-head="idle" aria-pressed="false">idle</button>
+  </div>
+  <p class="hint">Hover any row to see what that row is doing.</p>
+  <svg id="w2-svg" viewBox="0 0 760 420" role="img" aria-label="Attention weight heatmap, lower triangular, one row per query token"></svg>
+  <div id="w2-explain" class="explain"></div>
+  <div class="readout">
+    <div class="stat"><span>mean weight on position 0</span><b id="w2-sink" class="hot">0.000</b><i>averaged over all twelve rows</i></div>
+    <div class="stat"><span>rows parked on the sink</span><b id="w2-rows">0 / 12</b><i>rows where this head is idling</i></div>
+  </div>
+</div>
+<figcaption><b>Orange means the weight went to position 0. Blue means it went to a real token.</b> Read the induction head top to bottom and it splits in half. The sentence is new, so rows 1 to 7 are orange: nothing to copy, so the head parks. Then the sentence starts again and rows 8 to 11 turn blue, one guess per row. Same head, same weights, doing opposite things depending on whether there is a repeat in front of it. The previous-token head hardly ever needs the sink. The idle head needs nothing else. <span style="color:var(--base1)">(Patterns are generated from the induction rule to show the shape. They are not extracted from a trained model.)</span></figcaption>
+</figure>
+</div>
+
+<div class="wrap">
+<h2 id="noop">What a sinking head actually outputs</h2>
+
+<p>The observation usually gets stated as: for a sinking head, <span class="math" data-tex="\operatorname{softmax}(QK^{\top})V\approx\text{const}">softmax(QK&#7488;)V &asymp; const</span>, so the head adds no information.</p>
+
+<p>First half right, second half not quite. If a head puts 95% of its weight on the sink then its output is roughly <span class="math" data-tex="v_{\text{sink}}">v_sink</span>, the same vector no matter which query position you are at. That is not zero information. It is zero <em>token-dependent</em> information. What the head writes into the residual stream is a constant, which is a bias term.</p>
+
+<div class="eq"><span class="math-d" data-tex="\begin{aligned}\mathrm{out}_i&amp;=\sum_j a_{ij}\,v_j\\[4pt]a_{i0}\approx 1\quad&amp;\Longrightarrow\quad \mathrm{out}_i\approx v_0\quad\text{for every }i\\[4pt]\text{constant in }i\quad&amp;\Longrightarrow\quad\text{a bias, not a signal, and not zero}\end{aligned}">out_i = &Sigma;_j a[i,j] &middot; v_j
+
+     a[i,0] &asymp; 1   &rArr;   out_i &asymp; v_0   for all i
+
+     constant in i  &rArr;  a bias, not a signal, and not zero</span></div>
+
+<p>Three reasons the distinction matters:</p>
+
+<ul>
+  <li>Downstream layers can learn to ignore a constant, or subtract it, or use it as a bias. Nothing breaks.</li>
+  <li>It still is not free. The model is spending a KV slot, a set of head parameters and some residual-stream norm to emulate a bias nobody gave it.</li>
+  <li>In trained models <span class="math" data-tex="\lVert v_{\text{sink}}\rVert">&Vert;v_sink&Vert;</span> is often small, which makes the no-op cleaner still. A large weight on a small value vector is a small perturbation. The sail-sg study puts it more strongly: the sink behaves like a key bias, absorbing spare attention while contributing almost nothing to the value computation.</li>
+</ul>
+
+<p>And this is per head per position, not per layer. A layer where half the heads sink and half fire is doing plenty of work. The accurate version is: this head, at this position, is idling.</p>
+
+<div class="note"><b>There is a competing reading.</b> The sink may not be a pure no-op. People working on vision transformers found the same shape of thing, a few high-norm artifact tokens showing up in low-information background patches, and read them as scratch space: the model reusing uninformative positions to hold global information. Giving it dedicated <b>register</b> tokens to do that in cleaned up the attention maps and helped dense prediction. So sinks may be doing two jobs at once. The two readings are not exclusive, and which one dominates probably depends on the head.</div>
+
+<h2 id="fixes">Three fixes, increasing invasiveness</h2>
+
+<h3>1 &middot; Add a phantom zero-logit key</h3>
+
+<p>Evan Miller's take in <a href="https://www.evanmiller.org/attention-is-off-by-one.html">Attention Is Off By One</a> is that none of this is a design tradeoff. It is a bug, and the fix is one character.</p>
+
+<div class="eq"><span class="math-d" data-tex="\begin{aligned}\operatorname{softmax}(x)_i&amp;=\frac{e^{x_i}}{\phantom{\textcolor{#cb4b16}{1}+{}}\sum_j e^{x_j}}\\[10pt]\operatorname{softmax}_1(x)_i&amp;=\frac{e^{x_i}}{\textcolor{#cb4b16}{1}+\sum_j e^{x_j}}\end{aligned}">softmax(x)_i  = exp(x_i) / (     &Sigma;_j exp(x_j))
+
+softmax&#8321;(x)_i = exp(x_i) / ( 1 + &Sigma;_j exp(x_j))
+                             &uarr;
+                       the missing term</span></div>
+
+<p>Adding <span class="math" data-tex="1=e^{0}">1 = exp(0)</span> to the denominator is the same thing as appending a phantom key whose logit is 0 and whose value vector is 0. Rows can now come to less than one. A head with nothing to do sends its weight to the phantom and writes approximately nothing into the residual stream.</p>
+
+<p>That reading is Miller's own. He nearly called the function <b>ghostmax</b>, on the grounds that you can think of an extra zero-valued entry in the logits, since <span class="math" data-tex="e^{0}=1">exp(0) = 1</span>, together with a zero row in <span class="math" data-tex="V">V</span> that attenuates the result. He named the resulting mechanism <b>QuietAttention</b>, because it lets attention heads keep quiet.</p>
+
+<p>The name earns itself once you ask where softmax came from. Softmax is the right tool for picking exactly one of n options, which is what multinomial classification does. Attention is not doing that. Attention is an optional lookup, and the options it should be choosing between are not the n keys but the n keys plus the option of picking none of them. It was handed a list of n and it normalised over n. The list should have been n + 1.</p>
+
+<p>Which gives you the cleanest way to read the sink. The model reinvented this fix on its own, using what it had. With no phantom slot available it took a real one: position 0, the only key visible from everywhere.</p>
+
+<div class="note"><b>Flagging this ahead of time</b> Miller called his post an opinion piece, ran no experiments, and asked readers to test it. So I did, at toy scale: a small model trained with softmax&#8321; built a sink on position 0 anyway, 0.448 against 0.447 for plain softmax, with the phantom slot absorbing only 0.023. That is not a refutation. His prediction was about quantization outliers and weight kurtosis, not about where attention parks, and 2 layers at 64 dimensions is nobody's idea of evidence. But read the next three fixes as theory with an open experimental question attached.</div>
+
+<p>It is worth noticing how the diagnosis arrived, because it was not three teams stumbling on the same thing at once. A group at Qualcomm AI Research found it first, from the quantization side, chasing activation outliers that were wrecking low-precision inference. Their paper carries a title that doubles as the thesis of this post: <i>Quantizable Transformers: Removing Outliers by Helping Attention Heads Do Nothing</i>. They traced the outliers to the softmax and proposed two fixes, a clipped softmax and a gated attention variant. Miller read that paper, judged both fixes overbuilt, and pointed out that the same job is done by incrementing a denominator. He is explicit that they got "killer-in-the-closet close" to the off-by-one. StreamingLLM then found the same object from a third direction two months later, as the thing you must not evict.</p>
+
+<h3>What breaking &Sigma; = 1 actually changes</h3>
+
+<p>It is easy to read <code>+1</code> as a cosmetic change to a normaliser. It is not. Three things change, and the second one is the one people skip past.</p>
+
+<p><strong>The output stops being a convex combination of value vectors.</strong> Under softmax, <span class="math" data-tex="\mathrm{out}_i">out_i</span> is always a weighted average of the <span class="math" data-tex="v_j">v_j</span>, so it sits inside their convex hull and cannot be small unless the values themselves are small. Under softmax&#8321; the row is a sub-distribution, a measure with total mass somewhere in [0, 1] rather than a probability distribution, so the output can shrink continuously toward the origin. Heads write additively into the residual stream, so a near-zero write leaves the stream alone. That is the do-nothing operation the architecture never provided.</p>
+
+<p><strong>Translation invariance goes away, and that is the point.</strong> Softmax does not care if you shift every logit by the same constant, since <span class="math" data-tex="\operatorname{softmax}(z+c)=\operatorname{softmax}(z)">softmax(z + c) = softmax(z)</span>. Only the differences between logits carry information, which means a softmax head literally cannot say "none of these keys are a good match". All it can say is "this one beats that one". Softmax&#8321; compares logits against a fixed reference of 0, so absolute size starts to matter. The head gets a dimension it did not have before: not just which key, but whether any key at all.</p>
+
+<div class="note"><b>How Miller puts it</b> He does not use the phrase translation invariance. He makes the same point as a limit, which is arguably cleaner: as every logit goes to minus infinity, ordinary softmax converges to <span class="math" data-tex="1/k">1/k</span> per key and never releases its unit of weight, while softmax&#8321; converges to zero. He calls that "an escape hatch in the negative orthant", and separately notes that the ratio between any two output weights is identical under both functions, so nothing about the head's preferences is disturbed. Only its ability to decline changes.</div>
+
+<p><strong>You inherit a numerical stability trap.</strong> The usual max-subtraction trick has to account for the phantom logit, which means clamping the max at zero. Without that, a row of strongly negative logits overflows the <code>exp(-m)</code> term.</p>
+
+<pre><code class="py">def softmax1(x, dim=-1):
+    # exp(x_i) / (1 + sum_j exp(x_j)), which is a softmax over x
+    # with a zero logit appended whose value vector is also zero.
+    m = x.amax(dim=dim, keepdim=True).clamp(min=0.0)   # phantom logit is 0
+    e = (x - m).exp()
+    return e / ((-m).exp() + e.sum(dim=dim, keepdim=True))</code></pre>
+
+<p>Note the <code>clamp(min=0.0)</code>. Leave it out and the function is fine for ordinary logits and silently wrong for exactly the case it exists to handle, the idle head whose logits are all low.</p>
+
+<p>Figure 3 is that limit, made draggable. Push the shift down and watch ordinary softmax refuse to let go.</p>
+</div>
+
+<div class="wide">
+<figure>
+<div class="fig" id="w4">
+  <div class="fig-head"><b>Figure 3</b> <span>Add the same number to every logit: who notices?</span></div>
+  <div class="eq" style="margin:.2rem 0 1.2rem"><span class="math-d" data-tex="\begin{aligned}\operatorname{softmax}(x+\delta)&amp;=\operatorname{softmax}(x)&amp;&amp;\text{for any }\delta\\[3pt]\operatorname{softmax}_1(x+\delta)_i&amp;=\frac{e^{x_i+\delta}}{1+\sum_j e^{x_j+\delta}}&amp;&amp;\text{moves with }\delta\end{aligned}">softmax(x + δ)   = softmax(x)              for any δ
+softmax₁(x + δ)_i = e^(x_i+δ) / (1 + Σ_j e^(x_j+δ))   moves with δ</span></div>
+  <p class="hint">Drag the slider. &delta; is a single number added to all six logits at once, so their differences never change.</p>
+  <div class="srow" style="grid-template-columns:13ch 1fr 6ch; margin-bottom:1rem">
+    <span class="tk">shift &delta; =</span>
+    <input type="range" id="w4-d" min="-5" max="6" step="0.1" value="0" aria-label="Additive shift applied to every logit">
+    <output id="w4-dout">+0.0</output>
+  </div>
+  <svg id="w4-svg" viewBox="0 0 720 200" role="img" aria-label="Two stacked bars comparing softmax and softmax-one under a uniform logit shift"></svg>
+  <div class="readout">
+    <div class="stat"><span>&Sigma; softmax</span><b id="w4-s0">1.000</b><i>invariant by construction</i></div>
+    <div class="stat"><span>&Sigma; softmax&#8321;</span><b id="w4-s1" class="cool">0.000</b><i>tracks how good the best match is</i></div>
+    <div class="stat"><span>weight on phantom</span><b id="w4-ph" style="color:var(--violet)">0.000</b><i>the head declining to answer</i></div>
+  </div>
+</div>
+<figcaption><b>The relative logits are identical in both rows and never move.</b> Only the overall level changes. The softmax bar is frozen, because shifting every logit by &delta; cancels out of the ratio exactly, so a softmax head has no way to report that nothing here is a good match. The softmax&#8321; bar breathes. At &delta; = -5 about 94% of the weight sits on the phantom and the head writes almost nothing; by &delta; = +6 it has converged on ordinary softmax. That range is the way out that the sink was standing in for.</figcaption>
+</figure>
+</div>
+
+<div class="wrap">
+<h3>2 &middot; Make the null logit learnable</h3>
+
+<div class="eq"><span class="math-d" data-tex="a_{ij}=\frac{\exp(z_{ij})}{\textcolor{#6c71c4}{\exp(s_h)}+\sum_l \exp(z_{il})}">a[i,j] = exp(z_ij) / (exp(s_h) + &Sigma;_l exp(z_il))</span></div>
+
+<p>Same idea, but the null logit is a trainable scalar per head. Each head learns its own threshold for giving up. Try the learned sink logit mode in Figure 1 and sweep <span class="math" data-tex="s_h">s_h</span>. It is a dial running from plain softmax to writing nothing.</p>
+
+<p>This is not hypothetical. OpenAI's <a href="https://github.com/openai/gpt-oss">gpt-oss</a> ships it, and the implementation is almost exactly the sentence above:</p>
+
+<pre><code class="py"># gpt_oss/torch/model.py, lightly trimmed
+self.sinks = torch.nn.Parameter(torch.empty(config.num_attention_heads))
+...
+QK = torch.cat([QK, S], dim=-1)     # append the per-head sink logit
+W = torch.softmax(QK, dim=-1)
+W = W[..., :-1]                     # then drop that column</code></pre>
+
+<p>Append a phantom logit, softmax over the widened row, throw the phantom away. One learnable scalar per head, and the row of real weights is free to sum to less than one. The same file also applies a sliding window on alternate layers, so a shipped model is carrying both halves of this post: the cache trick from the top, and the mechanism that makes it unnecessary.</p>
+
+<h3>3 &middot; Drop normalisation entirely</h3>
+
+<div class="eq"><span class="math-d" data-tex="a_{ij}=\sigma\!\left(\frac{q_i^{\top}k_j}{\sqrt{d}}+b\right)">a[i,j] = &sigma;(q_i &middot; k_j / &radic;d + b)</span></div>
+
+<p>Each key gets gated on its own. No competition between keys, no row-sum constraint, no forced weight. Attending to nothing is directly representable, so the pressure that creates the sink is gone at the source. The <a href="https://github.com/sail-sg/Attention-Sink">sail-sg/Attention-Sink</a> line of work is the reference point here, and it reports that models trained with sigmoid attention show no attention sink at all, and that this still holds when scaled to 1B parameters.</p>
+
+<p>It is not a drop-in swap though.</p>
+
+<ul>
+  <li>You give up the competitive prior. "These keys compete for a fixed budget" is a genuinely useful thing to build in, and losing it is not obviously free.</li>
+  <li>Output magnitude now grows with sequence length, so you need a length-dependent bias, roughly <span class="math" data-tex="b\approx-\log n">b &asymp; -log n</span>, to keep activations in range.</li>
+  <li>Initialisation needs care for training to stay stable, and you need decent kernels to keep pace with FlashAttention.</li>
+  <li>The published no-sink results are at modest scale. Whether they hold up at frontier scale is open.</li>
+</ul>
+
+<h2 id="practice">Why practitioners care</h2>
+
+<p>The sink stops being a curiosity the moment you touch the KV cache. Move the cursor and toggle the retention policy.</p>
+</div>
+
+<div class="wide">
+<figure>
+<div class="fig" id="w3">
+  <div class="fig-head"><b>Figure 4</b> <span>Sliding-window cache with and without pinned sinks</span></div>
+  <div class="controls">
+    <span class="ctl-label">Policy</span>
+    <button class="seg" data-sink="off" aria-pressed="true">evict everything old</button>
+    <button class="seg" data-sink="on" aria-pressed="false">pin first 4 tokens</button>
+  </div>
+  <p class="hint">Drag the position slider past 11 and watch what leaves the cache.</p>
+  <div class="srow" style="grid-template-columns:11ch 1fr 6ch; margin-bottom:.5rem">
+    <span class="tk">position</span>
+    <input type="range" id="w3-pos" min="4" max="47" value="30" aria-label="Current decoding position">
+    <output id="w3-posout">30</output>
+  </div>
+  <div class="cachestrip" id="w3-strip"></div>
+  <div class="readout">
+    <div class="stat"><span>tokens in cache</span><b id="w3-count">0</b></div>
+    <div class="stat"><span>sink visible to query</span><b id="w3-vis">no</b></div>
+  </div>
+  <div class="verdict bad" id="w3-verdict"></div>
+</div>
+<figcaption><b>A window of 8 over a 48-token sequence.</b> Orange is pinned sinks, blue is the sliding window, faded is evicted. The failure is not gradual. The moment position 0 leaves the cache, every idle head loses its parking spot and has to dump weight onto whatever is still in the window, which corrupts outputs that were fine one token earlier. <span style="color:var(--base1)">(The verdict text is qualitative. It is not a measurement.)</span></figcaption>
+</figure>
+</div>
+
+<div class="wrap">
+<ul>
+  <li><strong>Cache eviction.</strong> Any sliding-window or compression scheme has to pin the first few tokens. That is the StreamingLLM result, and it is why eviction policies special-case position 0.</li>
+  <li><strong>Prompt truncation.</strong> Trimming an overlong prompt from the front can hurt much more than trimming from the middle, because you might delete the sink.</li>
+  <li><strong>Quantization.</strong> Sinks travel with massive activations, outlier features of enormous magnitude sitting on a few tokens and channels. They ruin naive per-tensor activation quantization, and they are much of the reason per-channel and group-wise scaling exist. This is also how the sink got found in the first place. If your INT8 conversion is losing accuracy for no visible reason, suspect the sink before you suspect your calibration set.</li>
+  <li><strong>Interpretability.</strong> A large attention weight does not mean the token is important. A head dumping 95% of its weight on <code>&lt;BOS&gt;</code> is telling you it is inactive, not that <code>&lt;BOS&gt;</code> is critical. Attention-as-explanation has this backwards, and any attribution method built on raw weights needs to handle sinks deliberately.</li>
+</ul>
+
+<hr>
+
+<h2 id="takeaway">The takeaway</h2>
+
+<p>Attention sinks are not a bug the model has. They are a workaround the model built. Softmax handed it a constraint, spend exactly one unit of attention, with no way out, and gradient descent found the cheapest way out available: pick a token everyone can see and make it the place where unwanted weight goes to die.</p>
+
+<p>Which makes the interesting question something other than how to remove attention sinks. It is what else the architecture has forced the model to improvise, and what those improvisations are costing us.</p>
+
+<div class="note"><b>Sources</b>
+<ul class="srcs">
+<li><a href="https://www.evanmiller.org/attention-is-off-by-one.html">Attention Is Off By One</a> <span>Evan Miller, 24 July 2023. Proposes softmax&#8321; and QuietAttention.</span></li>
+<li><a href="https://arxiv.org/abs/2306.12929">Quantizable Transformers: Removing Outliers by Helping Attention Heads Do Nothing</a> <span>Bondarenko, Nagel and Blankevoort. Qualcomm AI Research, NeurIPS 2023. The original diagnosis, from quantization.</span></li>
+<li><a href="https://arxiv.org/abs/2309.17453">Efficient Streaming Language Models with Attention Sinks</a> <span>Xiao, Tian, Chen, Han and Lewis. The experiment this post opens with, and the name.</span></li>
+<li><a href="https://arxiv.org/abs/2410.10781">When Attention Sink Emerges in Language Models: An Empirical View</a> <span>sail-sg, with <a href="https://github.com/sail-sg/Attention-Sink">code</a>. Sigmoid attention, and the sink as a key bias.</span></li>
+<li><a href="https://arxiv.org/abs/2402.17762">Massive Activations in Large Language Models</a> <span>Sun, Chen, Kolter and Liu. The outlier side of the same object.</span></li>
+<li><a href="https://arxiv.org/abs/2309.16588">Vision Transformers Need Registers</a> <span>Darcet, Oquab, Mairal and Bojanowski. The scratch-space reading.</span></li>
+<li><a href="https://github.com/openai/gpt-oss">openai/gpt-oss</a> <span>Learned per-head sink logits as shipped, in <code>gpt_oss/torch/model.py</code>.</span></li>
+</ul></div>
+
+</div>
+<div class="wrap"><footer><a href="/blog/">More posts</a> &middot; <a href="/">namanjaswani27.github.io</a></footer></div>
+</main>
+
+<div class="tt" id="tt"></div>
+
+<script>
+(function(){
+"use strict";
+const $=(s,r)=>(r||document).querySelector(s), $$=(s,r)=>[...(r||document).querySelectorAll(s)];
+const fmt=(x,n)=>x.toFixed(n===undefined?3:n);
+const tt=$("#tt");
+function showTT(e,txt){tt.textContent=txt;tt.style.opacity=1;tt.style.left=(e.clientX+12)+"px";tt.style.top=(e.clientY-30)+"px";}
+function hideTT(){tt.style.opacity=0;}
+
+/* segmented button groups */
+function seg(root,attr,cb){
+  $$("button.seg["+attr+"]",root).forEach(b=>b.addEventListener("click",()=>{
+    $$("button.seg["+attr+"]",root).forEach(o=>o.setAttribute("aria-pressed",o===b));
+    cb(b.getAttribute(attr));
+  }));
+}
+
+/* ============ Figure 1: mass allocator ============ */
+(function(){
+  const root=$("#w1");
+  const KEYS=[{t:"<BOS>",sink:true},{t:"the"},{t:"cat"},{t:"sat"},{t:"on"},{t:"mat"}];
+  let logits=[2,0.5,0.5,0.5,0.5,0.5], mode="softmax", s=0;
+
+  const sl=$("#w1-sliders");
+  KEYS.forEach((k,i)=>{
+    const row=document.createElement("div"); row.className="srow";
+    row.innerHTML='<span class="tk'+(k.sink?" sink":"")+'">'+k.t.replace(/</g,"&lt;").replace(/>/g,"&gt;")+
+      '</span><input type="range" min="-2" max="8" step="0.1" value="'+logits[i]+
+      '" aria-label="logit for key '+k.t+'"><output>'+fmt(logits[i],1)+'</output>';
+    const inp=$("input",row), out=$("output",row);
+    inp.addEventListener("input",()=>{logits[i]=+inp.value; out.textContent=fmt(logits[i],1); draw();});
+    row._inp=inp; row._out=out; sl.appendChild(row);
+  });
+
+  const extra=$("#w1-slider-extra");
+  extra.innerHTML='<div class="srow" style="grid-template-columns:8ch 1fr 5ch"><span class="tk" style="color:var(--violet)">s_h</span>'+
+    '<input type="range" id="w1-s" min="-2" max="10" step="0.1" value="0" aria-label="learned sink logit"><output id="w1-sout">0.0</output></div>';
+  const sInp=$("#w1-s");
+  sInp.addEventListener("input",()=>{s=+sInp.value; $("#w1-sout").textContent=fmt(s,1); draw();});
+
+  function weights(){
+    const n=KEYS.length;
+    if(mode==="sigmoid"){
+      const b=-Math.log(n);
+      return {w:logits.map(z=>1/(1+Math.exp(-(z+b)))), phantom:0, label:"unconstrained"};
+    }
+    const ex=logits.map(z=>Math.exp(z)), S=ex.reduce((a,b)=>a+b,0);
+    let extraDen=0;
+    if(mode==="plus1") extraDen=1;
+    if(mode==="learned") extraDen=Math.exp(s);
+    const den=S+extraDen;
+    return {w:ex.map(e=>e/den), phantom:extraDen/den, label:mode};
+  }
+
+  const svg=$("#w1-svg");
+  function draw(){
+    const {w,phantom}=weights();
+    const bars=KEYS.map((k,i)=>({t:k.t,v:w[i],sink:k.sink}));
+    if(mode!=="softmax"&&mode!=="sigmoid") bars.push({t:"⌀ phantom",v:phantom,phantom:true});
+    if(mode==="sigmoid") bars.push({t:"(no budget)",v:0,ghost:true});
+
+    const W=380,H=240,L=76,R=12,T=8,B=18;
+    const bh=(H-T-B)/bars.length, pad=Math.min(7,bh*0.28);
+    const maxv=Math.max(1,...bars.map(b=>b.v));
+    let g="";
+    // gridlines at 0,.25,.5,.75,1 of the axis
+    for(let i=0;i<=4;i++){
+      const x=L+(W-L-R)*(i/4);
+      g+='<line x1="'+x+'" y1="'+T+'" x2="'+x+'" y2="'+(H-B)+'" stroke="#e3dcc6" stroke-width="1"/>';
+      g+='<text x="'+x+'" y="'+(H-5)+'" font-family="var(--mono)" font-size="9" fill="#93a1a1" text-anchor="middle">'+fmt(maxv*i/4,2)+'</text>';
+    }
+    bars.forEach((b,i)=>{
+      const y=T+i*bh, bw=(W-L-R)*(b.v/maxv);
+      const col=b.phantom?"#6c71c4":b.ghost?"#93a1a1":b.sink?"#cb4b16":"#268bd2";
+      g+='<text x="'+(L-8)+'" y="'+(y+bh/2+3)+'" font-family="var(--mono)" font-size="10.5" fill="'+(b.sink?"#cb4b16":b.phantom?"#6c71c4":"#586e75")+'" text-anchor="end">'+
+         b.t.replace(/</g,"&lt;").replace(/>/g,"&gt;")+'</text>';
+      g+='<rect x="'+L+'" y="'+(y+pad/2)+'" width="'+(W-L-R)+'" height="'+(bh-pad)+'" fill="#eee8d5"/>';
+      g+='<rect x="'+L+'" y="'+(y+pad/2)+'" width="'+Math.max(0,bw)+'" height="'+(bh-pad)+'" fill="'+col+'" opacity="'+(b.ghost?.3:.85)+'"/>';
+      if(b.v>0.06) g+='<text x="'+(L+bw-6)+'" y="'+(y+bh/2+3.5)+'" font-family="var(--mono)" font-size="9.5" fill="#fdf6e3" text-anchor="end">'+fmt(b.v)+'</text>';
+    });
+    svg.innerHTML=g;
+
+    const sum=w.reduce((a,b)=>a+b,0);   /* real keys only: the phantom is not weight spent */
+    const content=w.slice(1).reduce((a,b)=>a+b,0);
+    $("#w1-sum").textContent=fmt(sum);
+    $("#w1-sink").textContent=fmt(w[0]);
+    $("#w1-content").textContent=fmt(content);
+    $("#w1-sumnote").textContent = mode==="softmax" ? "forced to exactly 1"
+      : mode==="sigmoid" ? "no constraint at all"
+      : "the missing " + fmt(phantom) + " went to the phantom";
+    extra.style.display = mode==="learned" ? "block" : "none";
+  }
+
+  seg(root,"data-mode",m=>{mode=m;draw();});
+  seg(root,"data-preset",p=>{
+    if(p==="fires") logits=[2,0.5,7,0.5,0.5,0.5];
+    if(p==="idle")  logits=[7,0.5,0.5,0.5,0.5,0.5];
+    if(p==="flat")  logits=[-1.5,-1.5,-1.5,-1.5,-1.5,-1.5];
+    $$(".srow",sl).forEach((r,i)=>{r._inp.value=logits[i]; r._out.textContent=fmt(logits[i],1);});
+    draw();
+  });
+  draw();
+})();
+
+/* ============ Figure 2: attention matrices ============ */
+(function(){
+  const root=$("#w2");
+  const TOK=["<BOS>","Ada","Lovelace","wrote","the","first","program",".","Ada","Lovelace","wrote","the"];
+  const n=TOK.length;
+  let head="induction", hover=-1;
+  const esc=t=>t.replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+  function softmax(z){const m=Math.max(...z),e=z.map(v=>Math.exp(v-m)),s=e.reduce((a,b)=>a+b,0);return e.map(v=>v/s);}
+
+  /* for row i, which key does this head want, and why */
+  function intent(kind,i){
+    if(kind==="idle") return {target:0,src:-1};
+    if(kind==="local") return {target:i>0?i-1:0,src:-1};
+    for(let j=i-1;j>=1;j--){ if(TOK[j-1]===TOK[i]) return {target:j,src:j-1}; }
+    return {target:0,src:-1};
+  }
+
+  function matrix(kind){
+    const M=[],meta=[];
+    for(let i=0;i<n;i++){
+      const z=new Array(i+1).fill(0);
+      z[0]=6;                                  // sink key scores well against any query
+      const it=intent(kind,i);
+      if(it.target>0) z[it.target]=8;
+      const w=softmax(z);
+      M.push(w); meta.push(it);
+    }
+    return {M,meta};
+  }
+
+  const BLUE=[38,139,210], ORANGE=[203,75,22], BG=[238,232,213];
+  function ramp(v,to){const t=Math.pow(Math.max(0,Math.min(1,v)),0.55);
+    return "rgb("+BG.map((c,i)=>Math.round(c+(to[i]-c)*t)).join(",")+")";}
+
+  function story(kind,i,M,meta){
+    const it=meta[i], w=M[i], tgt=it.target;
+    const q=t=>"\u201c"+esc(t)+"\u201d";
+    const pct=v=>fmt(v*100,1)+"%";
+    const me=q(TOK[i]);
+    if(i===0) return "Row 0 is the very first token, and the only thing it can look at is itself. Nowhere else to go.";
+    if(tgt===0){
+      if(kind==="idle") return "Row "+i+", "+me+". This head has no job here, so it parks on position 0 and puts "+pct(w[0])+" of its weight there. Whatever it writes out is the same thing it writes everywhere else.";
+      return "Row "+i+", "+me+". The word "+me+" has not come up before, so there is nothing earlier to copy from. The head parks on position 0 with "+pct(w[0])+" of its weight. It is doing nothing here.";
+    }
+    if(kind==="local") return "Row "+i+", "+me+". This head only ever reads the token just before it, so it looks at position "+tgt+", "+q(TOK[tgt])+", with "+pct(w[tgt])+" of its weight.";
+    return "Row "+i+", "+me+". The word "+me+" came up before at position "+it.src+", and the word right after it was "+q(TOK[tgt])+" at position "+tgt+". So the head looks there with "+pct(w[tgt])+" of its weight, guessing "+q(TOK[tgt])+" comes next. Real work.";
+  }
+
+  const svg=$("#w2-svg");
+  function draw(){
+    const {M,meta}=matrix(head);
+    const L=118,T=86,cell=26,W=760,RA=L+n*cell+14;
+    let g="";
+
+    /* legend */
+    const lx=548,lw=132;
+    [["working: weight on a real key",BLUE,0],["idling: weight on position 0",ORANGE,1]].forEach(([lab,to,k])=>{
+      const y=16+k*30;
+      for(let t=0;t<=22;t++){
+        g+='<rect x="'+(lx+t*(lw/23))+'" y="'+y+'" width="'+(lw/23+.6)+'" height="9" fill="'+ramp(t/22,to)+'"/>';
+      }
+      g+='<text x="'+(lx-6)+'" y="'+(y+8)+'" font-family="var(--mono)" font-size="8.5" fill="#93a1a1" text-anchor="end">0</text>';
+      g+='<text x="'+(lx+lw+5)+'" y="'+(y+8)+'" font-family="var(--mono)" font-size="8.5" fill="#93a1a1">1</text>';
+      g+='<text x="'+lx+'" y="'+(y+20)+'" font-family="var(--mono)" font-size="8.5" fill="#93a1a1">'+lab+'</text>';
+    });
+
+    /* axis titles */
+    g+='<text x="'+L+'" y="14" font-family="var(--mono)" font-size="9.5" fill="#93a1a1">KEY: the token being read from</text>';
+    g+='<text x="4" y="'+(T-14)+'" font-family="var(--mono)" font-size="9.5" fill="#93a1a1">QUERY</text>';
+    g+='<text x="4" y="'+(T-3)+'" font-family="var(--mono)" font-size="9.5" fill="#93a1a1">the token</text>';
+    g+='<text x="4" y="'+(T+8)+'" font-family="var(--mono)" font-size="9.5" fill="#93a1a1">doing the</text>';
+    g+='<text x="4" y="'+(T+19)+'" font-family="var(--mono)" font-size="9.5" fill="#93a1a1">reading</text>';
+
+    /* column headers */
+    for(let j=0;j<n;j++){
+      const x=L+j*cell+cell/2;
+      g+='<text x="'+x+'" y="'+(T-8)+'" font-family="var(--mono)" font-size="9.5" fill="'+(j===0?"#cb4b16":"#93a1a1")+
+         '" text-anchor="start" transform="rotate(-52 '+x+' '+(T-8)+')">'+j+' '+esc(TOK[j])+'</text>';
+    }
+
+    for(let i=0;i<n;i++){
+      const dim=(hover>=0&&hover!==i)?0.32:1;
+      g+='<text x="'+(L-9)+'" y="'+(T+i*cell+cell/2+3.5)+'" font-family="var(--mono)" font-size="9.5" fill="#586e75" text-anchor="end" opacity="'+dim+'">'+
+         i+' '+esc(TOK[i])+'</text>';
+      for(let j=0;j<n;j++){
+        const x=L+j*cell,y=T+i*cell;
+        if(j>i){
+          g+='<rect x="'+x+'" y="'+y+'" width="'+(cell-2)+'" height="'+(cell-2)+'" fill="none" stroke="#efe9d6"/>';
+        }else{
+          const v=M[i][j];
+          g+='<rect class="cell" data-i="'+i+'" data-j="'+j+'" data-v="'+v+'" x="'+x+'" y="'+y+'" width="'+(cell-2)+
+             '" height="'+(cell-2)+'" fill="'+ramp(v,j===0?ORANGE:BLUE)+'" opacity="'+dim+'"/>';
+        }
+      }
+      /* what this row did */
+      const it=meta[i], parked=(it.target===0);
+      const lab = i===0 ? "only itself" : parked ? "parked on 0" : ("reads "+it.target+" "+TOK[it.target]);
+      g+='<text x="'+RA+'" y="'+(T+i*cell+cell/2+3.5)+'" font-family="var(--mono)" font-size="9.5" fill="'+
+         (parked?"#cb4b16":"#268bd2")+'" opacity="'+dim+'">'+esc(lab)+'</text>';
+    }
+
+    /* the sink column */
+    g+='<rect x="'+(L-3)+'" y="'+(T-3)+'" width="'+(cell+2)+'" height="'+(n*cell+2)+'" fill="none" stroke="#cb4b16" stroke-width="1.5" stroke-dasharray="3 3"/>';
+    g+='<text x="'+(L+cell/2)+'" y="'+(T+n*cell+16)+'" font-family="var(--mono)" font-size="9" fill="#cb4b16" text-anchor="middle">the sink</text>';
+    g+='<text x="'+RA+'" y="'+(T+n*cell+16)+'" font-family="var(--mono)" font-size="9" fill="#859900">every row sums to 1.00</text>';
+
+    svg.innerHTML=g;
+
+    $$(".cell",svg).forEach(c=>{
+      const i=+c.dataset.i, j=+c.dataset.j;
+      c.addEventListener("mousemove",e=>showTT(e,"query "+i+" "+TOK[i]+"  reads key "+j+" "+TOK[j]+"  =  "+fmt(+c.dataset.v)));
+      c.addEventListener("mouseenter",()=>{ if(hover!==i){hover=i;draw();} $("#w2-explain").innerHTML=story(head,i,M,meta); });
+      c.addEventListener("mouseleave",hideTT);
+    });
+    svg.addEventListener("mouseleave",()=>{ if(hover!==-1){hover=-1;draw(); $("#w2-explain").innerHTML=summary(head,M,meta);} },{once:true});
+
+    let tot=0,rows=0;
+    for(let i=0;i<n;i++){tot+=M[i][0]; if(M[i][0]>0.5) rows++;}
+    $("#w2-sink").textContent=fmt(tot/n);
+    $("#w2-rows").textContent=rows+" / "+n;
+    if(hover<0) $("#w2-explain").innerHTML=summary(head,M,meta);
+  }
+
+  function summary(kind,M,meta){
+    if(kind==="idle") return "This head never has anything to do. Every row dumps its weight on position 0.";
+    if(kind==="local") return "This head just reads whatever token came immediately before, so it almost never needs the sink.";
+    return "Rows 1 to 7 are the sentence being said for the first time. Nothing has repeated yet, so there is nothing to copy, and every one of those rows parks on position 0. From row 8 the sentence starts again, and the head has something to copy in every row.";
+  }
+
+  seg(root,"data-head",h=>{head=h;hover=-1;draw();});
+  draw();
+})();
+
+/* ============ Figure 3: translation invariance ============ */
+(function(){
+  const KEYS=["<BOS>","cat","sat","on","mat"];
+  const BASE=[0.4,1.6,0.2,-0.4,0.1];
+  const COL=["#cb4b16","#268bd2","#2aa198","#859900","#b58900"];
+  const svg=$("#w4-svg");
+  let d=0;
+
+  function draw(){
+    const z=BASE.map(v=>v+d);
+    const ex=z.map(v=>Math.exp(v)), S=ex.reduce((a,b)=>a+b,0);
+    const w0=ex.map(e=>e/S);              // softmax
+    const w1=ex.map(e=>e/(1+S));          // softmax-one
+    const ph=1/(1+S);
+
+    const W=720,L=104,RGAP=96,TW=W-L-RGAP,H=200;
+    const rows=[
+      {y:44,label:"softmax",w:w0,phantom:0,muted:true},
+      {y:116,label:"softmax₁",w:w1,phantom:ph,muted:false}
+    ];
+    let g="";
+    // axis ticks
+    [0,.25,.5,.75,1].forEach(t=>{
+      const x=L+TW*t;
+      g+='<line x1="'+x+'" y1="30" x2="'+x+'" y2="172" stroke="#e3dcc6" stroke-width="1"/>';
+      g+='<text x="'+x+'" y="188" font-family="var(--mono)" font-size="9.5" fill="#93a1a1" text-anchor="middle">'+t.toFixed(2)+'</text>';
+    });
+    g+='<text x="'+L+'" y="18" font-family="var(--mono)" font-size="9.5" fill="#93a1a1">TOTAL ATTENTION MASS ALLOCATED →</text>';
+
+    rows.forEach(r=>{
+      const h=40;
+      g+='<text x="'+(L-12)+'" y="'+(r.y+h/2+4)+'" font-family="var(--mono)" font-size="12" fill="'+(r.muted?"#93a1a1":"#586e75")+'" text-anchor="end">'+r.label+'</text>';
+      g+='<rect x="'+L+'" y="'+r.y+'" width="'+TW+'" height="'+h+'" fill="#eee8d5"/>';
+      let x=L, tot=0;
+      r.w.forEach((v,i)=>{
+        const seg=TW*v; tot+=v;
+        g+='<rect x="'+x+'" y="'+r.y+'" width="'+Math.max(0,seg)+'" height="'+h+'" fill="'+COL[i]+'" opacity="'+(r.muted?.5:.9)+'"/>';
+        if(seg>34) g+='<text x="'+(x+seg/2)+'" y="'+(r.y+h/2+4)+'" font-family="var(--mono)" font-size="10" fill="#fdf6e3" text-anchor="middle">'+
+          KEYS[i].replace(/</g,"&lt;").replace(/>/g,"&gt;")+'</text>';
+        x+=seg;
+      });
+      if(r.phantom>0){
+        const seg=TW*r.phantom;
+        g+='<rect x="'+x+'" y="'+r.y+'" width="'+Math.max(0,seg)+'" height="'+h+'" fill="#6c71c4" opacity=".9"/>';
+        if(seg>52) g+='<text x="'+(x+seg/2)+'" y="'+(r.y+h/2+4)+'" font-family="var(--mono)" font-size="10" fill="#fdf6e3" text-anchor="middle">⌀ phantom</text>';
+        tot+=r.phantom;
+      }
+      g+='<text x="'+(L+TW+12)+'" y="'+(r.y+h/2+4)+'" font-family="var(--mono)" font-size="11" fill="'+(r.muted?"#93a1a1":"#586e75")+'">Σ '+fmt(tot)+'</text>';
+    });
+    svg.innerHTML=g;
+
+    $("#w4-s1").textContent=fmt(w1.reduce((a,b)=>a+b,0));
+    $("#w4-ph").textContent=fmt(ph);
+    $("#w4-dout").textContent=(d>=0?"+":"")+fmt(d,1);
+  }
+  $("#w4-d").addEventListener("input",e=>{d=+e.target.value;draw();});
+  draw();
+})();
+
+/* ============ Figure 4: sliding window cache ============ */
+(function(){
+  const root=$("#w3"), N=48, WIN=8, NSINK=4;
+  let pin=false, pos=30;
+  const strip=$("#w3-strip");
+  function draw(){
+    const lo=Math.max(0,pos-WIN+1);
+    let html="", count=0;
+    for(let i=0;i<N;i++){
+      let cls="tokbox";
+      if(i<=pos){
+        const isSink=(pin&&i<NSINK), inWin=(i>=lo);
+        if(isSink){cls+=" sink"; count++;}
+        else if(inWin){cls+=" win"; count++;}
+        if(i===pos) cls+=" cur";
+      }
+      html+='<div class="'+cls+'" title="position '+i+'">'+i+'</div>';
+    }
+    strip.innerHTML=html;
+    $("#w3-count").textContent=count;
+    const visible = pin || (0>=lo);
+    $("#w3-vis").textContent = visible ? "yes" : "no";
+    $("#w3-posout").textContent = pos;
+    const v=$("#w3-verdict");
+    if(visible){
+      v.className="verdict good";
+      v.textContent="Position 0 is still in the cache. Idle heads have somewhere to park and the output stays coherent, and this keeps working for arbitrarily long streams.";
+    }else{
+      v.className="verdict bad";
+      v.textContent="Position 0 has been evicted. Every idle head now has to dump its unit of weight onto tokens inside the window, which injects spurious signal into the residual stream. Generation degrades sharply.";
+    }
+  }
+  $("#w3-pos").addEventListener("input",e=>{pos=+e.target.value;draw();});
+  seg(root,"data-sink",v=>{pin=(v==="on");draw();});
+  draw();
+})();
+
+/* ============ KaTeX ============ */
+(function(){
+  let done=false;
+  function render(){
+    if(done||!window.katex) return;
+    done=true;
+    document.querySelectorAll("[data-tex]").forEach(function(el){
+      const tex=el.getAttribute("data-tex");
+      try{
+        katex.render(tex, el, {displayMode:el.classList.contains("math-d"), throwOnError:true, strict:"error"});
+        el.classList.add("rendered");
+      }catch(e){
+        /* leave the plain-text fallback in place */
+        console.warn("KaTeX failed on:", tex, e.message);
+      }
+    });
+  }
+  if(document.readyState!=="loading") render();
+  document.addEventListener("DOMContentLoaded",render);
+  window.addEventListener("load",render);
+})();
+
+/* ============ python highlighter ============ */
+(function(){
+  const rx=/(#[^\n]*)|("""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|\b(\d+\.?\d*)\b|\b(import|from|as|with|for|in|if|else|elif|return|def|class|None|True|False|not|and|or|lambda|while|try|except|pass|print)\b|\b([A-Za-z_]\w*)(?=\s*\()/g;
+  const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  $$("pre code.py").forEach(el=>{
+    const src=el.textContent;
+    el.innerHTML=esc(src).replace(rx,(m,com,str,num,kw,fn)=>{
+      const c=com?"c-com":str?"c-str":num?"c-num":kw?"c-kw":"c-fn";
+      return '<span class="'+c+'">'+m+'</span>';
+    });
+  });
+})();
+})();
+</script>
