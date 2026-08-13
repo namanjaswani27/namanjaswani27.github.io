@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Attention Sinks: the softmax has no off switch</title>
@@ -44,7 +45,7 @@ body{
 
 /* ---------- chrome ---------- */
 .progress{position:fixed; top:0; left:0; right:0; height:4px; z-index:200;
-          background:var(--base2); pointer-events:none}
+          background:var(--hair); pointer-events:none}
 .progress>div{height:100%; width:0; background:var(--blue)}
 
 .bar{
@@ -623,7 +624,7 @@ W = W[..., :-1]                     # then drop that column</code></pre>
   if(!b) return;
   let queued=false;
   function update(){
-    const d=document.documentElement;
+    const d=document.scrollingElement||document.documentElement;
     const max=d.scrollHeight-d.clientHeight;
     b.style.width=(max>0 ? (d.scrollTop/max)*100 : 0)+"%";
     queued=false;
