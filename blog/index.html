@@ -58,13 +58,21 @@ footer a{color:var(--base00)}
 <div class="bar">
   <a href="/">namanjaswani27.github.io</a> <span>/</span> <span>blog</span>
   <span class="spacer"></span>
-  <span>1 post</span>
+  <span>2 posts</span>
 </div>
 
 <div class="wrap">
   <h1>Blog</h1>
 
   <ul class="posts">
+    <li>
+      <h3><a href="/blog/transformer-decoder/">Parallel training, sequential decoding</a></h3>
+      <p>A decoder trains on every position at once but generates one token at a time. Both compute the same function. One property of causal masking is why, and why the KV cache is exact rather than approximate.</p>
+      <div class="pmeta">
+        <span>5 September 2026</span><span>~14 min</span>
+        <span class="tag">transformers</span><span class="tag">inference</span><span class="tag">KV cache</span>
+      </div>
+    </li>
     <li>
       <h3><a href="/blog/attention-sinks/">Attention Sinks: the softmax has no off switch</a></h3>
       <p>Every attention row has to sum to one. When a head has nothing worth attending to it still has to put that weight somewhere, so the model builds itself a drain.</p>

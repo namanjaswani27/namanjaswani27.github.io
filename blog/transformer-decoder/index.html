@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parallel training, sequential decoding</title>
+<meta name="description" content="A decoder trains on every position at once but generates one token at a time. Both compute the same function, and one property of causal masking explains why, why the KV cache is exact, and why none of it transfers to an RNN.">
+<meta name="author" content="Naman Jaswani">
+<meta name="theme-color" content="#fdf6e3">
+<link rel="canonical" href="https://namanjaswani27.github.io/blog/transformer-decoder/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Parallel training, sequential decoding">
+<meta property="og:description" content="A decoder trains on every position at once but generates one token at a time. Both compute the same function, and one property of causal masking explains why, why the KV cache is exact, and why none of it transfers to an RNN.">
+<meta property="og:url" content="https://namanjaswani27.github.io/blog/transformer-decoder/">
+<meta property="article:published_time" content="2026-09-05">
+<meta name="twitter:card" content="summary">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.css" integrity="sha384-u1zONI5gPXUx0UKI62c75/zww972y0v2rSK5ZYlVdS6xEuWDeZWUI66v6t1gvlXJ" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.js" integrity="sha384-ykMNcWQhhTUb0YV9SPpPUFURHZ+tWmubkakGBP+OgNK/UXdO2gtzglWx0Rj9hnO3" crossorigin="anonymous"></script>
+
+<style>
+:root{
+  --base3:#fdf6e3; --base2:#eee8d5; --base1:#93a1a1; --base0:#839496;
+  --base00:#657b83; --base01:#586e75; --base02:#073642; --base03:#002b36;
+  --yellow:#b58900; --orange:#cb4b16; --red:#dc322f; --magenta:#d33682;
+  --violet:#6c71c4; --blue:#268bd2; --cyan:#2aa198; --green:#859900;
+
+  --sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+
+  --measure:68ch;
+  --hair:#e2dbc5;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--base3); color:var(--base00);
+  font-family:var(--sans); font-size:19px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:#e4e9d6}
+
+/* ---------- chrome ---------- */
+.progress{position:fixed; top:0; left:0; right:0; height:4px; z-index:200;
+          background:var(--hair); pointer-events:none}
+.progress>div{height:100%; width:0; background:var(--blue)}
+
+.bar{
+  position:sticky; top:0; z-index:50;
+  display:flex; gap:.75rem; align-items:center; flex-wrap:wrap;
+  padding:.6rem clamp(1rem,5vw,3rem);
+  background:rgba(253,246,227,.94); backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--hair);
+  font-family:var(--mono); font-size:12px; color:var(--base1);
+}
+.bar b{color:var(--base01); font-weight:500}
+.bar .spacer{flex:1}
+.bar a{color:var(--base01); text-decoration:none}
+.bar a:hover{color:var(--blue)}
+
+.wrap{max-width:var(--measure); margin:0 auto; padding:0 clamp(1rem,5vw,2rem)}
+.wide{max-width:min(1100px,94vw); margin:0 auto; padding:0 clamp(1rem,4vw,2rem)}
+
+/* ---------- hero ---------- */
+header.hero{padding:clamp(2.6rem,8vh,5rem) 0 1.4rem}
+.eyebrow{
+  font-family:var(--mono); font-size:12px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--base1); margin:0 0 1.2rem;
+}
+h1{
+  font-family:var(--sans); font-weight:600;
+  font-size:clamp(2rem,5.5vw,3rem); line-height:1.12;
+  letter-spacing:-.028em; color:var(--base01); margin:0 0 .9rem;
+}
+h1 em{font-style:normal; color:var(--blue)}
+.deck{
+  font-size:clamp(1.12rem,2.4vw,1.32rem); line-height:1.5; font-weight:400;
+  color:var(--base00); max-width:52ch; margin:0 0 1.6rem;
+}
+.meta{
+  font-family:var(--mono); font-size:12px; color:var(--base1);
+  display:flex; gap:.5rem 1rem; flex-wrap:wrap; align-items:center;
+  padding-top:1rem; border-top:1px solid var(--hair);
+}
+.tag{color:var(--cyan)}
+
+/* ---------- body type ---------- */
+main{padding-bottom:5rem}
+h2{
+  font-family:var(--sans); font-weight:600; font-size:1.3rem;
+  letter-spacing:-.015em; color:var(--base01);
+  margin:3.4rem 0 1rem; padding-top:1.1rem;
+  border-top:1px solid var(--hair); scroll-margin-top:4rem;
+}
+h3{
+  font-family:var(--sans); font-weight:600; font-size:1.12rem;
+  letter-spacing:-.01em; color:var(--base01); margin:2.2rem 0 .6rem;
+}
+p{margin:0 0 1.1rem}
+.lede{font-size:1.06em; color:var(--base01)}
+a{color:var(--blue); text-decoration-thickness:1px; text-underline-offset:2px}
+a:hover{color:var(--cyan)}
+strong{color:var(--base01); font-weight:600}
+em{font-style:italic}
+code{
+  font-family:var(--mono); font-size:.85em; color:var(--base01);
+  background:var(--base2); padding:.08em .3em; border-radius:2px;
+}
+ul,ol{margin:0 0 1.1rem; padding-left:1.35rem}
+li{margin:.32rem 0}
+li::marker{color:var(--base1)}
+hr{border:0; border-top:1px solid var(--hair); margin:2.6rem 0}
+
+.contents{
+  font-family:var(--mono); font-size:13.5px; line-height:2;
+  margin:2.2rem 0; padding:0;
+}
+.contents a{color:var(--base00); text-decoration:none; display:block}
+.contents a:hover{color:var(--blue)}
+.contents span{color:var(--base1); margin-right:.7rem}
+
+/* the one recurring rule device, reserved for equations */
+.eq{
+  background:var(--base2); border-left:2px solid var(--blue);
+  padding:1.1rem 1.15rem; margin:1.7rem 0; overflow-x:auto; color:var(--base01);
+}
+.math-d{display:block; font-family:var(--mono); font-size:14px; white-space:pre; line-height:1.85}
+.math{font-family:var(--mono); font-size:.86em; white-space:nowrap}
+.math-d.rendered,.math.rendered{font-family:inherit; white-space:normal; font-size:inherit}
+.katex{color:var(--base01); font-size:1.04em}
+.math.rendered .katex{font-size:1em}
+.katex-display{margin:0; padding:.1rem 0; overflow-x:auto; overflow-y:hidden; text-align:left}
+.katex-display>.katex{display:inline-block; text-align:left; white-space:normal}
+
+/* asides: hairlines and a small label, no tinted panels */
+.note{
+  font-size:.95em; line-height:1.6; color:var(--base00);
+  border-top:1px solid var(--hair); border-bottom:1px solid var(--hair);
+  padding:.95rem 0; margin:1.9rem 0;
+}
+.note b{color:var(--base01); font-weight:600}
+.note>b:first-child{
+  display:block; font-family:var(--mono); font-weight:500;
+  font-size:11.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--base1); margin-bottom:.4rem;
+}
+
+.srcs{margin:.6rem 0 0; padding-left:1.1rem; font-size:.95em; line-height:1.5}
+.srcs li{margin:.42rem 0}
+.srcs li>span{display:block; color:var(--base1); font-size:.9em}
+
+.pull{
+  font-family:var(--mono); font-weight:500;
+  font-size:clamp(1.25rem,3.2vw,1.7rem); line-height:1.42;
+  letter-spacing:-.03em; color:var(--base01);
+  max-width:30ch; margin:2.7rem 0;
+}
+.pull em{font-style:normal; color:var(--orange)}
+
+.hint{
+  font-family:var(--mono); font-size:12.5px; line-height:1.55;
+  color:var(--orange); margin:0 0 .85rem;
+  display:flex; gap:.45rem; align-items:baseline;
+}
+.hint::before{content:"\2192"; flex:none}
+
+pre{
+  background:var(--base2); border-radius:2px;
+  padding:1rem 1.05rem; overflow-x:auto; margin:1.6rem 0;
+  font-family:var(--mono); font-size:13.5px; line-height:1.7;
+}
+pre code{background:none; padding:0; font-size:inherit; color:var(--base00)}
+.c-com{color:var(--base1)}
+.c-str{color:var(--cyan)}
+.c-num{color:var(--magenta)}
+.c-kw{color:var(--green)}
+.c-fn{color:var(--blue)}
+
+/* ---------- figures ---------- */
+figure{margin:2.4rem 0}
+.fig{border:1px solid var(--hair); border-radius:2px; background:#fcf7e6;
+     padding:1rem clamp(.75rem,2.4vw,1.25rem) 1.15rem}
+.fig-head{
+  display:flex; gap:.7rem; align-items:baseline; flex-wrap:wrap;
+  font-family:var(--mono); font-size:11.5px; color:var(--base1);
+  padding-bottom:.85rem; margin-bottom:1rem; border-bottom:1px solid var(--hair);
+}
+.fig-head b{color:var(--base01); font-weight:500}
+figcaption{
+  font-size:.9em; line-height:1.6; color:var(--base1);
+  margin-top:.85rem; max-width:74ch;
+}
+figcaption b{color:var(--base00); font-weight:600}
+
+.controls{display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.9rem}
+button.seg{
+  font-family:var(--mono); font-size:12px; color:var(--base00);
+  background:transparent; border:1px solid #d9d1b8; border-radius:2px;
+  padding:.32rem .68rem; cursor:pointer; transition:background .12s,color .12s;
+}
+button.seg:hover{background:var(--base2); color:var(--base01)}
+button.seg[aria-pressed="true"]{background:var(--base01); border-color:var(--base01); color:var(--base3)}
+button.seg:focus-visible,input:focus-visible{outline:2px solid var(--violet); outline-offset:2px}
+.ctl-label{font-family:var(--mono); font-size:11.5px; color:var(--base1); align-self:center; margin-right:.15rem}
+
+.sliders{display:grid; gap:.3rem}
+.srow{display:grid; grid-template-columns:8ch 1fr 5ch; gap:.65rem; align-items:center;
+      font-family:var(--mono); font-size:12.5px}
+.srow .tk{color:var(--base01); text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.srow .tk.sink{color:var(--orange)}
+.srow output{color:var(--base1); text-align:right; font-variant-numeric:tabular-nums}
+input[type=range]{width:100%; accent-color:var(--base01); height:1.1rem}
+
+.readout{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); gap:.65rem;
+  font-family:var(--mono); margin-top:1rem; padding-top:.9rem; border-top:1px solid var(--hair);
+}
+.stat span{display:block; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--base1)}
+.stat b{font-size:1.3rem; font-weight:500; color:var(--base01); font-variant-numeric:tabular-nums}
+.stat b.hot{color:var(--orange)}
+.stat b.cool{color:var(--blue)}
+.stat i{font-style:normal; font-size:11px; color:var(--base1); display:block; line-height:1.4; margin-top:.1rem}
+
+.explain{
+  font-family:var(--mono); font-size:13px; line-height:1.65;
+  color:var(--base00); margin-top:.85rem; padding-top:.75rem;
+  border-top:1px solid var(--hair); min-height:3.6em;
+}
+
+svg{display:block; max-width:100%; height:auto}
+.tt{
+  position:fixed; pointer-events:none; opacity:0; transition:opacity .1s;
+  font-family:var(--mono); font-size:11px; background:var(--base02); color:var(--base3);
+  padding:.28rem .48rem; border-radius:2px; z-index:99; white-space:nowrap;
+}
+
+.cachestrip{display:flex; flex-wrap:wrap; gap:3px; margin:.35rem 0 0}
+.tokbox{
+  font-family:var(--mono); font-size:10.5px; width:2rem; height:1.6rem;
+  display:grid; place-items:center; border-radius:2px;
+  background:var(--base2); color:#c4bfa9; border:1px solid transparent;
+  transition:background .15s,color .15s;
+}
+.tokbox.win{background:#d7e7f4; color:var(--blue); border-color:#bdd9ed}
+.tokbox.sink{background:#f7e1d2; color:var(--orange); border-color:#eccbb2}
+.tokbox.cur{outline:2px solid var(--violet); outline-offset:1px}
+
+.verdict{
+  font-family:var(--mono); font-size:12.5px; line-height:1.6;
+  margin-top:.95rem; padding-top:.8rem; border-top:1px solid var(--hair);
+}
+.verdict.bad{color:#a2261f}
+.verdict.good{color:#5f6b1a}
+
+footer a{color:var(--base00)}
+footer{border-top:1px solid var(--hair); padding:1.8rem 0 3.5rem;
+       font-family:var(--mono); font-size:12px; color:var(--base1)}
+
+@media (max-width:560px){
+  body{font-size:17.5px}
+  .srow{grid-template-columns:6.5ch 1fr 4.5ch; gap:.45rem}
+  .tokbox{width:1.7rem; height:1.4rem; font-size:9px}
+  .katex{font-size:.96em}
+}
+@media (prefers-reduced-motion:reduce){ *{animation:none!important; transition:none!important} }
+
+/* ---------- post-specific ---------- */
+/* .note.aside marks a block the reader can skip: adjacent detail, not argument.
+   A wash of --yellow at very low alpha, hairlines tinted to match, and a golden
+   label. Deliberately not the 2px left border, which stays reserved for .eq. */
+.note.aside{
+  background:#faf2d9; border-color:#ece0b4;
+  padding:.95rem 1.05rem; margin:2rem 0;
+}
+.note.aside>b:first-child{color:var(--yellow)}
+
+.tokbox.reuse{background:#d7e7f4; color:var(--blue); border-color:#bdd9ed}
+.tokbox.redo{background:#f7e1d2; color:var(--orange); border-color:#eccbb2}
+.tokbox.fresh{background:#e1e0f2; color:var(--violet); border-color:#c9c7e8}
+.striplabel{font-family:var(--mono); font-size:11px; color:var(--base1);
+            margin:.9rem 0 .1rem; letter-spacing:.04em; text-transform:uppercase}
+.legend{display:flex; gap:1.1rem; flex-wrap:wrap; font-family:var(--mono);
+        font-size:11.5px; color:var(--base1); margin-top:.75rem}
+.legend i{font-style:normal; display:inline-flex; align-items:center; gap:.4rem}
+.legend i>b{display:inline-block; width:11px; height:11px; border-radius:2px; border:1px solid rgba(0,0,0,.06)}
+</style>
+
+<div class="progress" aria-hidden="true"><div id="progress-bar"></div></div>
+
+<div class="bar">
+  <a href="/">namanjaswani27.github.io</a> <span>/</span> <a href="/blog/">blog</a>
+  <span class="spacer"></span>
+  <span>05 Sep 2026</span>
+</div>
+
+<div class="wrap">
+<header class="hero">
+  <p class="eyebrow">Transformer internals</p>
+  <h1>Parallel training, <em>sequential</em> decoding</h1>
+  <p class="deck">A decoder trains on every position at once but generates one token at a time. Both compute the same function. One property of causal masking is why, and why the KV cache is exact rather than approximate.</p>
+  <div class="meta">
+    <span>Naman Jaswani</span><span>&middot;</span><span>05 September 2026</span><span>&middot;</span><span>~14 min</span>
+    <span class="tag">transformers</span><span class="tag">inference</span><span class="tag">kv-cache</span>
+  </div>
+</header>
+</div>
+
+<main>
+<div class="wrap">
+
+<p class="lede">Take a decoder-only transformer. Push a whole sequence through it in one forward pass and note the logits at position 20.</p>
+
+<p>Now throw that away. Feed the model one token at a time, keeping each step's key and value vectors so you never recompute them. Read the logits at position 20 again.</p>
+
+<p>You get the same numbers. Not close numbers, the same ones, down to the last bits of the mantissa.</p>
+
+<p>The two procedures look nothing alike. One is a batch of large matrix multiplications. The other is a loop that grows a buffer. They agree because of a single property of the decoder: <strong>a token's representation never depends on anything to its right</strong>. Parallel training, the exactness of the KV cache, and the failure of both to transfer to an RNN are all consequences of that one fact.</p>
+
+<nav class="contents">
+  <a href="#forcing"><span>01</span>Teacher forcing and the causal mask</a>
+  <a href="#loop"><span>02</span>Generation, and the loop that redoes everything</a>
+  <a href="#cache"><span>03</span>The KV cache is bookkeeping</a>
+  <a href="#memory"><span>04</span>What the cache costs</a>
+  <a href="#rnn"><span>05</span>Why this does not transfer to an RNN</a>
+  <a href="#takeaway"><span>06</span>The takeaway</a>
+</nav>
+
+<h2 id="forcing">Teacher forcing and the causal mask</h2>
+
+<p>A decoder-only language model is trained to predict the next token. Given a sequence of tokens <span class="math" data-tex="x_0, x_1, \ldots, x_{n-1}">x0, x1, ..., x(n-1)</span>, the objective sums a next-token prediction over every position:</p>
+
+<div class="eq"><span class="math-d" data-tex="\mathcal{L}(\theta) \;=\; -\sum_{t=1}^{n-1} \log p_\theta\!\left(x_t \,\middle|\, x_0,\ldots,x_{t-1}\right)">L(theta) = - sum_t log p_theta( x_t | x_0 ... x_{t-1} )</span></div>
+
+<p><strong>Teacher forcing</strong> is the choice of what to condition on. At position <span class="math" data-tex="t">t</span> the model could be fed the tokens it predicted itself for positions <span class="math" data-tex="0">0</span> through <span class="math" data-tex="t-1">t-1</span>, or it could be fed the true tokens from the training data. Teacher forcing means feeding the true ones. The name comes from recurrent network training, where it was introduced as a way to keep a network's state from drifting during training by clamping it to the correct history.</p>
+
+<p>This is what buys the parallelism. <em>At every position, the correct target is already sitting in the training batch.</em> Position 5 is trained to predict token 5, and it does not need the model's guess at token 4 first, because token 4 is right there in the data. Nothing waits on anything. All <span class="math" data-tex="n">n</span> predictions can be computed in the same forward pass.</p>
+
+<p>There is one obstacle. Plain self-attention lets every position read every other position. If position 3 can read position 4, it can see the token it is being asked to predict. The model would score almost perfectly and learn nothing. So the scores get an additive mask before the softmax:</p>
+
+<div class="eq"><span class="math-d" data-tex="S \;=\; \frac{QK^{\top}}{\sqrt{d_h}} + M, \qquad \text{Attn}(Q,K,V) \;=\; \text{softmax}(S)\,V">S = QK^T / sqrt(d_h) + M,    Attn(Q,K,V) = softmax(S) V</span></div>
+
+<p>Here <span class="math" data-tex="S">S</span> is the matrix of attention scores, one per query-key pair, and <span class="math" data-tex="M">M</span> is the mask that is added to it before the softmax. The mask has one entry per pair, and it takes one of two values:</p>
+
+<div class="eq"><span class="math-d" data-tex="M_{ij} \;=\; 0 \quad \text{if } j \le i \qquad\qquad M_{ij} \;=\; -\infty \quad \text{if } j &gt; i">M_ij = 0      if j <= i          M_ij = -inf   if j > i</span></div>
+
+<p>An additive <span class="math" data-tex="-\infty">-inf</span> sends that weight to exactly zero, so row <span class="math" data-tex="i">i</span> of the output is a weighted sum over positions 0 through <span class="math" data-tex="i">i</span> and nothing else. Stack that through every layer and the containment holds all the way to the logits.</p>
+
+<p>The next claim carries the rest of the post. Write <span class="math" data-tex="F">F</span> for the model and <span class="math" data-tex="\mathbf{y}_i">y_i</span> for row <span class="math" data-tex="i">i</span> of a masked forward pass over the whole sequence:</p>
+
+<div class="eq"><span class="math-d" data-tex="\mathbf{y}_i \;=\; F\!\left(x_0, x_1, \ldots, x_i\right) \qquad \text{for every } i, \text{ independent of } x_{i+1}, \ldots, x_{n-1}">y_i = F(x_0, ..., x_i)   for every i, independent of x_{i+1} ... x_{n-1}</span></div>
+
+<p>Row <span class="math" data-tex="i">i</span> of the batched pass equals what you would get by running the model on the prefix alone and reading its last row. Not approximately, and not closely enough for practical purposes. Exactly, up to floating point summation order.</p>
+
+<p>The reason is easy to check. Every operation in a decoder block does one of two things. Layer norm, the feed-forward block and the output projection each work on one position at a time, so they cannot move information sideways at all. Attention is the only operation that mixes positions, and the mask has already stopped it reading rightwards. That leaves no path through the computation graph from a later token to an earlier row. Change token 20 and rows 0 through 19 do not move.</p>
+
+</div>
+
+<div class="wide">
+<figure>
+<div class="fig" id="w1">
+  <div class="fig-head"><b>Figure 1</b> <span>Which positions each row is allowed to read</span></div>
+  <p class="hint">Hover any row to see what that row depends on, and what it is trained to predict. Toggle the mask off to see what leaks.</p>
+  <div class="controls" role="group" aria-label="Masking mode">
+    <span class="ctl-label">attention</span>
+    <button class="seg" data-mask="causal" aria-pressed="true">causal mask</button>
+    <button class="seg" data-mask="none" aria-pressed="false">no mask</button>
+  </div>
+  <svg id="w1-svg" viewBox="0 0 720 350" role="img" aria-label="Grid of query positions against key positions, showing which pairs the causal mask permits"></svg>
+  <div class="explain" id="w1-explain"></div>
+  <div class="readout">
+    <div class="stat"><span>pairs allowed</span><b id="w1-allowed" class="cool">36</b><i>out of 64 possible</i></div>
+    <div class="stat"><span>row depends on</span><b id="w1-dep" class="cool">&middot;</b><i>positions, inclusive</i></div>
+    <div class="stat"><span>leaks the target</span><b id="w1-leak" class="hot">no</b><i>can a row see its own answer</i></div>
+  </div>
+</div>
+<figcaption><b>The mask is what makes a batched pass mean anything.</b> Each row is a query position, each column a key position. With the causal mask, row <i>i</i> reads columns 0 through <i>i</i> and its prediction target sits just outside its own reach. Turn the mask off and every row can see the token it is being asked to predict. <span style="color:var(--base1)">(Structural, not measured: the cells show which pairs the mask permits, not learned attention weights.)</span></figcaption>
+</figure>
+</div>
+
+<div class="wrap">
+
+<p>Two ideas get run together here. Teacher forcing is about <em>what you feed</em>. Causal masking is about <em>what each position may read</em>. Parallel training needs both. An RNN can be teacher-forced and still has to be unrolled step by step, which is the last section. A transformer without the mask runs in parallel and learns nothing.</p>
+
+<div class="note aside"><b>The cost of teacher forcing</b> Training conditions on true prefixes; generation conditions on the model's own output, mistakes included. The two distributions differ, so errors made during generation can compound in ways training never rehearsed. This is called exposure bias, and it is a separate topic from this post.</div>
+
+<h2 id="loop">Generation, and the loop that redoes everything</h2>
+
+<p>At generation time there is no true continuation to feed. Only the prompt exists, and every token after it has to be produced before anything can condition on it. The parallelism disappears, for no architectural reason: the inputs simply are not there yet. The loop is forced.</p>
+
+<pre><code class="py">toks = list(prompt)
+for _ in range(n_new):
+    logits = model(toks)          # full forward pass over everything so far
+    toks.append(argmax(logits[-1]))</code></pre>
+
+<p>That version calls the model on the whole sequence at every step. The usual explanation is that the attention interactions between tokens have to be recomputed each time. That explanation is wrong, and the real one is more useful.</p>
+
+<p>The interactions do <em>not</em> change. Row <span class="math" data-tex="i">i</span> depends only on tokens 0 through <span class="math" data-tex="i">i</span>, so appending a token to the end leaves every earlier row bit-identical, at every layer. Nothing in the past is stale. The naive loop recomputes it anyway and gets back exactly what it had.</p>
+
+<p>The real constraint is about state. The new token has to attend to every previous position, so every previous position's key and value vector has to be <em>available</em>. Available, not fresh. An RNN meets that by carrying one fixed-size vector <span class="math" data-tex="\mathbf{h}_{t-1}">h_{t-1}</span> summarising everything before it. A transformer meets it by keeping the history uncompressed: one key and one value per position, per layer. The naive loop is what you get when you have nowhere to keep them.</p>
+
+<p>The waste grows with the sequence. Step <span class="math" data-tex="t">t</span> pushes <span class="math" data-tex="t">t</span> positions through the network, so generating <span class="math" data-tex="n">n</span> tokens pushes about <span class="math" data-tex="n^2/2">n^2/2</span> position-slots through it, each paying for a full set of projections and a feed-forward block. Generating 512 tokens from an 8-token prompt sends 134,912 position-slots through the model. Only 520 of them are positions it has not already seen.</p>
+
+</div>
+
+<div class="wide">
+<figure>
+<div class="fig" id="w2">
+  <div class="fig-head"><b>Figure 2</b> <span>What each decoding step computes, with and without a cache</span></div>
+  <p class="hint">Drag the step slider to walk through generation, and switch the cache on to see which work disappears.</p>
+  <div class="controls" role="group" aria-label="Cache mode">
+    <span class="ctl-label">decoding</span>
+    <button class="seg" data-cache="off" aria-pressed="true">no cache</button>
+    <button class="seg" data-cache="on" aria-pressed="false">KV cache</button>
+  </div>
+  <div class="sliders">
+    <div class="srow"><span class="tk">step</span><input id="w2-step" type="range" min="0" max="7" step="1" value="3"><output id="w2-stepout">3</output></div>
+  </div>
+  <p class="striplabel">key/value vectors, position 0 to 11</p>
+  <div class="cachestrip" id="w2-strip"></div>
+  <div class="legend">
+    <i><b style="background:#f7e1d2"></b> recomputed from scratch</i>
+    <i><b style="background:#e1e0f2"></b> computed once, this step</i>
+    <i><b style="background:#d7e7f4"></b> read from cache</i>
+    <i><b style="background:#eee8d5"></b> not yet reached</i>
+  </div>
+  <div class="explain" id="w2-explain"></div>
+  <div class="readout">
+    <div class="stat"><span>k/v this step</span><b id="w2-now" class="hot">0</b><i>vectors projected</i></div>
+    <div class="stat"><span>k/v so far</span><b id="w2-cum" class="hot">0</b><i>cumulative, whole run</i></div>
+    <div class="stat"><span>ideal</span><b id="w2-ideal" class="cool">0</b><i>one per position, ever</i></div>
+  </div>
+</div>
+<figcaption><b>Every orange box is a vector the model already computed on an earlier step.</b> Without a cache the count grows with the square of the sequence length. With one, each position is projected exactly once and then read back. The tokens shown are position indices; the prompt occupies positions 0 to 3.</figcaption>
+</figure>
+</div>
+
+<div class="wrap">
+
+<h2 id="cache">The KV cache is bookkeeping</h2>
+
+<p>The fix is to keep the vectors. For each layer, hold two buffers that grow by one row per token. At each step, project only the newest position, append its key and value to the buffers, and attend against everything the buffers hold. Writing <span class="math" data-tex="\Vert">||</span> for appending a row:</p>
+
+<div class="eq"><span class="math-d" data-tex="K_{0:t} \;=\; K_{0:t-1} \,\Vert\, \mathbf{k}_t, \qquad V_{0:t} \;=\; V_{0:t-1} \,\Vert\, \mathbf{v}_t, \qquad \mathbf{o}_t \;=\; \text{softmax}(\mathbf{q}_t K_{0:t}^{\top} / \sqrt{d_h})\, V_{0:t}">K_{0:t} = K_{0:t-1} || k_t,   V_{0:t} = V_{0:t-1} || v_t,   o_t = softmax( q_t K_{0:t}^T / sqrt(d_h) ) V_{0:t}</span></div>
+
+<p>There is no mask in that expression, and none is needed: the buffer only ever holds positions that are already in the past. The mask and the cache enforce the same containment two different ways, one by zeroing forbidden weights and one by never having the forbidden vectors around at all.</p>
+
+<p>Per step, the projections and the feed-forward block drop from <span class="math" data-tex="t">t</span> positions to one. Attention does not, since the new query still has to be scored against <span class="math" data-tex="t">t</span> stored keys. So the expensive dense terms become constant per step, leaving a residual that grows linearly with context length.</p>
+
+<div class="note aside"><b>Three different quadratics</b> "Attention is quadratic" is true of three different things, with three different exponents. Counting only the attention term, for a sequence of length <span class="math" data-tex="n">n</span>:<ul><li><b>Training</b> is <span class="math" data-tex="O(n^2)">O(n^2)</span>. Every one of the <span class="math" data-tex="n">n</span> queries is scored against every key, once.</li><li><b>Naive generation</b> is <span class="math" data-tex="O(n^3)">O(n^3)</span>. It redoes that <span class="math" data-tex="O(n^2)">O(n^2)</span> work at each of the <span class="math" data-tex="n">n</span> steps.</li><li><b>Cached generation</b> is <span class="math" data-tex="O(n^2)">O(n^2)</span>. Step <span class="math" data-tex="t">t</span> scores one query against <span class="math" data-tex="t">t</span> keys, and those add up to <span class="math" data-tex="n^2/2">n^2/2</span>.</li></ul>So the cache removes one factor of <span class="math" data-tex="n">n</span>, taking generation from cubic to quadratic. It does not make attention linear.</div>
+
+<p>What makes this legal is the property from Section 1. A stored key can never be invalidated by a token appended after it, so reusing it carries no error term at all. It is the same number. That is unusual for a cache. Normally a cache is a bet that stale data is close enough; here staleness cannot happen.</p>
+
+<p>The two loops are the same arithmetic, differing only in what gets stored and what gets thrown away. Run them side by side on the same weights and the only disagreement is in the last bits of the mantissa, from summing the same products in a different order.</p>
+
+<p class="pull">The cache keeps vectors that the naive loop computes and then <em>throws away</em>.</p>
+
+</div>
+
+<div class="wrap">
+
+<h2 id="memory">What the cache costs</h2>
+
+<p>The cache trades arithmetic for memory, and the memory is not small. For a batch of <span class="math" data-tex="b">b</span> sequences at context length <span class="math" data-tex="n">n</span>, on a model with <span class="math" data-tex="L">L</span> layers, <span class="math" data-tex="H_{\text{kv}}">H_kv</span> key/value heads, head dimension <span class="math" data-tex="d_h">d_h</span>, at <span class="math" data-tex="s">s</span> bytes per element:</p>
+
+<div class="eq"><span class="math-d" data-tex="\text{cache bytes} \;=\; \underbrace{2}_{K \text{ and } V} \cdot\; L \,\cdot\, H_{\text{kv}} \,\cdot\, d_h \,\cdot\, n \,\cdot\, b \,\cdot\, s">cache bytes = 2 (K and V) * L * H_kv * d_h * n * b * s</span></div>
+
+<p>Everything except <span class="math" data-tex="n">n</span> and <span class="math" data-tex="b">b</span> is fixed the moment the architecture is chosen, so the cache grows linearly in context length and in batch size, off a constant you cannot change later. For Llama 3.1 8B, 32 layers with 8 key/value heads of dimension 128, that constant is 128 KB per token in fp16. At its full 128k context, one sequence needs 16 GB of cache. The weights are about 15 GB.</p>
+
+<p>Shrinking that constant is what multi-query and grouped-query attention are for. Shazeer argued in 2019 that incremental decoding is bound by the memory bandwidth of repeatedly reloading the key and value tensors, and proposed sharing one key/value head across all query heads. Grouped-query attention later settled on an intermediate number of key/value heads, with a recipe for converting existing multi-head checkpoints instead of retraining. The effect shows up in the configs. Llama 2 7B and Llama 3.1 8B have the same depth and the same head dimension, but the first keeps 32 key/value heads and the second keeps 8, so the cache per token drops from 512 KB to 128 KB.</p>
+
+</div>
+
+<div class="wide">
+<figure>
+<div class="fig" id="w4">
+  <div class="fig-head"><b>Figure 3</b> <span>KV cache size against model weights, for three real configurations</span></div>
+  <p class="hint">Pick a model, then drag context length and batch size to see when the cache overtakes the weights.</p>
+  <div class="controls" role="group" aria-label="Model configuration">
+    <span class="ctl-label">model</span>
+    <button class="seg" data-model="0" aria-pressed="true">Llama 2 7B</button>
+    <button class="seg" data-model="1" aria-pressed="false">Llama 3.1 8B</button>
+    <button class="seg" data-model="2" aria-pressed="false">Llama 3 70B</button>
+  </div>
+  <div class="sliders">
+    <div class="srow"><span class="tk">context</span><input id="w4-ctx" type="range" min="0" max="7" step="1" value="3"><output id="w4-ctxout">8k</output></div>
+    <div class="srow"><span class="tk">batch</span><input id="w4-bat" type="range" min="0" max="5" step="1" value="0"><output id="w4-batout">1</output></div>
+  </div>
+  <svg id="w4-svg" viewBox="0 0 720 250" role="img" aria-label="Bar chart comparing key value cache size against model weight size"></svg>
+  <div class="explain" id="w4-explain"></div>
+  <div class="readout">
+    <div class="stat"><span>per token</span><b id="w4-per" class="cool">128.0 KB</b><i>fp16, all layers</i></div>
+    <div class="stat"><span>cache total</span><b id="w4-tot" class="hot">0.00 GB</b><i>context times batch</i></div>
+    <div class="stat"><span>vs weights</span><b id="w4-pct" class="hot">0%</b><i>cache as share of fp16 weights</i></div>
+  </div>
+</div>
+<figcaption><b>Layer counts, head counts and head dimensions read from the published configs, with parameter counts computed from those same configs.</b> Grouped-query attention shows up as the gap between the first two models, which are otherwise the same shape. Marked contexts beyond a model's trained maximum are shown for scale and flagged in the readout line.</figcaption>
+</figure>
+</div>
+
+<div class="wrap">
+
+<h2 id="rnn">Why this does not transfer to an RNN</h2>
+
+<p>An RNN is teacher-forced too, with the ground-truth tokens supplied as inputs. So why can it not compute all positions at once? The answer is in the shape of its update:</p>
+
+<div class="eq"><span class="math-d" data-tex="\text{RNN:}\quad \mathbf{h}_t = f\!\left(\mathbf{h}_{t-1}, \mathbf{x}_t\right) \qquad\qquad \text{decoder:}\quad \mathbf{y}_i = g\!\left(\mathbf{x}_0, \ldots, \mathbf{x}_i\right)">RNN:   h_t = f(h_{t-1}, x_t)        decoder:   y_i = g(x_0, ..., x_i)</span></div>
+
+<p>The RNN's hidden state at step <span class="math" data-tex="t">t</span> consumes the hidden state at step <span class="math" data-tex="t-1">t-1</span>, which is an <em>output</em> of the previous step. You cannot start step <span class="math" data-tex="t">t</span> until step <span class="math" data-tex="t-1">t-1</span> has finished, however much hardware you own, because the thing you need does not exist yet. The decoder's row <span class="math" data-tex="i">i</span> consumes only <em>inputs</em>, and those are all in memory before the pass starts. Every row can go at once.</p>
+
+<p>Measure that difference as the depth of the dependency graph: how many rounds of computation you would need with one worker per node and unlimited workers. Both answers fall out of the recurrences directly. A decoder node at layer <span class="math" data-tex="l">l</span> waits only on layer <span class="math" data-tex="l-1">l-1</span>, all of which finishes together, so the whole model completes in <span class="math" data-tex="L+1">L+1</span> rounds. A recurrent node waits on layer <span class="math" data-tex="l-1">l-1</span> <em>and</em> on its own left neighbour, which chains, so the model completes in <span class="math" data-tex="n+L">n+L</span> rounds. At four layers the decoder needs five rounds whether the sequence is 4 tokens or 128. The RNN needs 8 and 132.</p>
+
+</div>
+
+<div class="wide">
+<figure>
+<div class="fig" id="w5">
+  <div class="fig-head"><b>Figure 4</b> <span>Dependency depth, with one worker per node and unlimited workers</span></div>
+  <p class="hint">Drag the sequence length. Colour is the round in which a node becomes computable, so orange means waiting.</p>
+  <div class="sliders">
+    <div class="srow"><span class="tk">length</span><input id="w5-t" type="range" min="3" max="20" step="1" value="8"><output id="w5-tout">8</output></div>
+    <div class="srow"><span class="tk">layers</span><input id="w5-l" type="range" min="1" max="4" step="1" value="3"><output id="w5-lout">3</output></div>
+  </div>
+  <svg id="w5-svg" viewBox="0 0 720 330" role="img" aria-label="Two dependency graphs side by side, showing constant depth for attention and linear depth for a recurrent network"></svg>
+  <div class="explain" id="w5-explain"></div>
+  <div class="readout">
+    <div class="stat"><span>decoder rounds</span><b id="w5-a" class="cool">4</b><i>layers plus one</i></div>
+    <div class="stat"><span>rnn rounds</span><b id="w5-r" class="hot">11</b><i>length plus layers</i></div>
+    <div class="stat"><span>ratio</span><b id="w5-ratio" class="hot">2.8&times;</b><i>grows without bound</i></div>
+  </div>
+</div>
+<figcaption><b>Each node's round is resolved from the dependency structure, not assumed.</b> Each node is one position's representation in one layer. A decoder node depends on layer inputs at every position up to its own, which are all ready together, so a whole layer completes in one round. A recurrent node depends on the node to its left in the same layer, which forces a chain as long as the sequence.</figcaption>
+</figure>
+</div>
+
+<div class="wrap">
+
+<p>Depth and speed are different things, though, and it is worth being clear about what shallow depth actually buys. It means the work <em>can</em> be spread out. It becomes speed only if you have hardware wide enough to spread it onto.</p>
+
+<p>The decoder also does more arithmetic than the recurrence at the same width. Self-attention carries an <span class="math" data-tex="n^2 d">n^2 d</span> term from scoring every pair of positions; the recurrence carries only <span class="math" data-tex="n d^2">n d^2</span>. Past roughly <span class="math" data-tex="n \approx d">n = d</span> the attention term dominates and keeps growing. On a single core, where nothing can be spread out, an RNN finishes first.</p>
+
+<p>So it is a trade. The decoder spends extra arithmetic to buy a dependency graph shallow enough to fill a GPU, and on a GPU that is an overwhelmingly good deal. It is why the architecture won. On one core it is a bad deal.</p>
+
+<p>One part of the recurrence penalty survives any hardware. Even with free arithmetic, the RNN pays a fixed cost per step simply to sequence the steps, <span class="math" data-tex="n">n</span> times, in an order nothing can rearrange. Latency like that does not shrink when you buy a wider machine.</p>
+
+<p>There is a neat symmetry in where this ended up. The transformer gave up the RNN's compact recurrent state to get parallel training, then spent memory at inference time buying a state back. The KV cache is that state, uncompressed and growing without bound. Much of the recent work on state space models and linear attention is an attempt to get the parallel-trainable structure and the fixed-size state together.</p>
+
+<hr>
+
+<h2 id="takeaway">The takeaway</h2>
+
+<p>One sentence to keep: in a causally masked decoder, a position's representation is a function of that position and everything before it, and of nothing else.</p>
+
+<p>Everything else here follows. Teacher forcing plus that property means the batched training pass and a sequential unrolling compute the same thing, so you may as well run the fast one. The same property means a stored key can never go stale, which is why the KV cache is exact rather than a heuristic. An RNN lacks the property, because its state consumes the previous state instead of the previous input, and that is why none of this transfers to it.</p>
+
+<p>What decided things on real hardware was never raw speed. It was the shape of the dependency graph, which determines whether the work can be spread out at all.</p>
+
+<div class="note"><b>Sources</b>
+<ul class="srcs">
+<li><a href="https://arxiv.org/abs/1706.03762">Attention Is All You Need</a> <span>Vaswani, Shazeer, Parmar, Uszkoreit, Jones, Gomez, Kaiser, Polosukhin. NeurIPS 2017. Introduces the masked decoder used here.</span></li>
+<li><a href="https://arxiv.org/abs/1911.02150">Fast Transformer Decoding: One Write-Head is All You Need</a> <span>Noam Shazeer, Google, November 2019. Argues that incremental decoding is bound by the memory bandwidth of reloading the key and value tensors, and introduces multi-query attention. The clearest early statement of why the cache is the inference bottleneck.</span></li>
+<li><a href="https://aclanthology.org/2023.emnlp-main.298/">GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints</a> <span>Ainslie, Lee-Thorp, de Jong, Zemlyanskiy, Lebron, Sanghai. Google Research, EMNLP 2023, pages 4895 to 4901. Introduces grouped-query attention and an uptraining recipe from existing multi-head checkpoints.</span></li>
+<li><a href="https://arxiv.org/abs/2211.05102">Efficiently Scaling Transformer Inference</a> <span>Pope, Douglas, Chowdhery, Devlin, Bradbury, Levskaya, Heek, Xiao, Agrawal, Dean. Google, arXiv November 2022, MLSys 2023. Partitioning and cost analysis for large-model decoding.</span></li>
+<li><a href="https://arxiv.org/abs/2312.00752">Mamba: Linear-Time Sequence Modeling with Selective State Spaces</a> <span>Albert Gu and Tri Dao, December 2023. Representative of the line of work seeking a fixed-size recurrent state that is still parallel to train. Cited here as a pointer to the direction rather than for a specific result.</span></li>
+</ul></div>
+
+
+</div>
+<div class="wrap"><footer><a href="/blog/">More posts</a> &middot; <a href="/">namanjaswani27.github.io</a></footer></div>
+</main>
+
+<div class="tt" id="tt"></div>
+
+<script>
+(function(){
+"use strict";
+
+/* ---------------- scroll progress ---------------- */
+(function(){
+  const b=document.getElementById("progress-bar");
+  if(!b) return;
+  let queued=false;
+  function update(){
+    const d=document.scrollingElement||document.documentElement;
+    const max=d.scrollHeight-d.clientHeight;
+    b.style.width=(max>0 ? (d.scrollTop/max)*100 : 0)+"%";
+    queued=false;
+  }
+  addEventListener("scroll",()=>{ if(!queued){queued=true; requestAnimationFrame(update);} },{passive:true});
+  addEventListener("resize",update);
+  update();
+})();
+
+/* ---------------- helpers ---------------- */
+const $=(s,r)=>(r||document).querySelector(s), $$=(s,r)=>[...(r||document).querySelectorAll(s)];
+const fmt=(x,n)=>x.toFixed(n===undefined?3:n);
+
+const tt=$("#tt");
+function showTT(e,txt){tt.textContent=txt;tt.style.opacity=1;tt.style.left=(e.clientX+12)+"px";tt.style.top=(e.clientY-30)+"px";}
+function hideTT(){tt.style.opacity=0;}
+
+function seg(root,attr,cb){
+  $$("button.seg["+attr+"]",root).forEach(b=>b.addEventListener("click",()=>{
+    $$("button.seg["+attr+"]",root).forEach(o=>o.setAttribute("aria-pressed",o===b));
+    cb(b.getAttribute(attr));
+  }));
+}
+
+const C={blue:"#268bd2", orange:"#cb4b16", violet:"#6c71c4", base1:"#93a1a1",
+         base01:"#586e75", base2:"#eee8d5", hair:"#e2dbc5", green:"#859900"};
+
+/* ================= Figure 1: causal mask ================= */
+(function(){
+  const root=$("#w1"), svg=$("#w1-svg"), ex=$("#w1-explain");
+  if(!root||!svg) return;
+  const toks=["the","cat","sat","on","the","mat","and","slept"];
+  const T=toks.length;
+  let mode="causal", hover=-1;
+
+  const LX=132, RX=700, TY=64, BY=318;
+  const CW=(RX-LX)/T, RH=(BY-TY)/T;
+
+  function allowed(i,j){ return mode==="causal" ? j<=i : true; }
+
+  function draw(){
+    let g="";
+    g+='<text x="'+(LX+(RX-LX)/2)+'" y="20" text-anchor="middle" font-family="var(--mono)" '
+      +'font-size="11" fill="'+C.base1+'">key position (what is being read)</text>';
+    for(let j=0;j<T;j++){
+      const cx=LX+j*CW+CW/2;
+      g+='<text x="'+cx+'" y="42" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="'+C.base1+'">'+j+'</text>';
+      g+='<text x="'+cx+'" y="56" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="'+C.base1+'">'+toks[j]+'</text>';
+    }
+    for(let i=0;i<T;i++){
+      const cy=TY+i*RH;
+      const dim=(hover>=0&&hover!==i);
+      g+='<text x="'+(LX-12)+'" y="'+(cy+RH/2+4)+'" text-anchor="end" font-family="var(--mono)" font-size="10.5" '
+        +'fill="'+(hover===i?C.base01:C.base1)+'" opacity="'+(dim?0.4:1)+'">'+i+' '+toks[i]+'</text>';
+      for(let j=0;j<T;j++){
+        const ok=allowed(i,j);
+        const x=LX+j*CW, y=cy;
+        let fill=C.base2, stroke=C.hair, op=1;
+        if(ok){ fill="#d7e7f4"; stroke="#bdd9ed"; }
+        if(ok && mode==="none" && j>i){ fill="#f7e1d2"; stroke="#eccbb2"; }
+        if(dim) op=0.28;
+        g+='<rect x="'+(x+1.5)+'" y="'+(y+1.5)+'" width="'+(CW-3)+'" height="'+(RH-3)+'" rx="2" '
+          +'fill="'+fill+'" stroke="'+stroke+'" opacity="'+op+'"/>';
+      }
+      /* target marker: the token this row is trained to predict */
+      if(i<T-1){
+        const tx=LX+(i+1)*CW+CW/2;
+        g+='<circle cx="'+tx+'" cy="'+(cy+RH/2)+'" r="3" fill="'+C.violet+'" opacity="'+(hover===i?1:(dim?0.15:0.32))+'"/>';
+      }
+      g+='<rect class="w1row" data-i="'+i+'" x="'+LX+'" y="'+cy+'" width="'+(RX-LX)+'" height="'+RH+'" fill="transparent" style="cursor:pointer"/>';
+    }
+    g+='<text x="14" y="'+(TY+(BY-TY)/2)+'" text-anchor="middle" font-family="var(--mono)" font-size="11" '
+      +'fill="'+C.base1+'" transform="rotate(-90 14 '+(TY+(BY-TY)/2)+')">query position (the row doing the predicting)</text>';
+    g+='<text x="'+LX+'" y="340" font-family="var(--mono)" font-size="10.5" fill="'+C.violet+'">'
+      +'\u25cf the token this row is trained to predict</text>';
+    svg.innerHTML=g;
+    $$(".w1row",svg).forEach(r=>{
+      r.addEventListener("mouseenter",()=>{hover=+r.getAttribute("data-i");draw();});
+      r.addEventListener("mouseleave",()=>{hover=-1;draw();});
+    });
+    update();
+  }
+
+  function update(){
+    let n=0;
+    for(let i=0;i<T;i++) for(let j=0;j<T;j++) if(allowed(i,j)) n++;
+    $("#w1-allowed").textContent=n;
+    $("#w1-leak").textContent = mode==="causal" ? "no" : "yes";
+    $("#w1-leak").className = mode==="causal" ? "cool" : "hot";
+    if(hover<0){
+      $("#w1-dep").textContent="\u00b7";
+      ex.textContent = mode==="causal"
+        ? "Each row reads only columns at or before its own position, so the token it is being asked to predict sits one step outside its reach."
+        : "Without the mask every row reads every column, including the token it is being asked to predict. The model would score well and learn nothing.";
+    } else {
+      const dep = mode==="causal" ? hover+1 : T;
+      $("#w1-dep").textContent=dep;
+      const tgt = hover<T-1 ? ("token "+(hover+1)+", \u201c"+toks[hover+1]+"\u201d") : "nothing (last position has no next token in this sequence)";
+      ex.textContent = "Row "+hover+" (\u201c"+toks[hover]+"\u201d) reads "+dep+" position"+(dep===1?"":"s")+", 0 to "+(mode==="causal"?hover:T-1)+". "
+        + "It is trained to predict "+tgt+". "
+        + (mode==="causal"
+            ? "That target is not among the positions it can read, which is the whole point."
+            : "That target IS among the positions it can read, so the prediction is free and worthless.");
+    }
+  }
+
+  seg(root,"data-mask",v=>{mode=v;draw();});
+  draw();
+})();
+
+/* ================= Figure 2: the decode loop ================= */
+(function(){
+  const root=$("#w2"), strip=$("#w2-strip"), ex=$("#w2-explain");
+  if(!root||!strip) return;
+  const PROMPT=4, STEPS=8, TOTAL=PROMPT+STEPS;
+  let cache="off", step=3;
+
+  function draw(){
+    const cur=PROMPT+step;              /* position being produced this step */
+    let html="";
+    for(let p=0;p<TOTAL;p++){
+      let cls="tokbox";
+      if(p<=cur){
+        if(p===cur) cls+=" fresh";
+        else cls+= (cache==="off" ? " redo" : " reuse");
+      }
+      if(p===cur) cls+=" cur";
+      html+='<div class="'+cls+'">'+p+'</div>';
+    }
+    strip.innerHTML=html;
+
+    const now = cache==="off" ? cur+1 : 1;
+    let cum;
+    if(cache==="off"){
+      cum=0; for(let s=0;s<=step;s++) cum += PROMPT+s+1;
+    } else {
+      cum = PROMPT + step + 1;          /* prefill, then one per step */
+    }
+    $("#w2-now").textContent=now;
+    $("#w2-cum").textContent=cum;
+    $("#w2-ideal").textContent=cur+1;
+    $("#w2-now").className = cache==="off" ? "hot":"cool";
+    $("#w2-cum").className = cache==="off" ? "hot":"cool";
+    $("#w2-stepout").textContent=step;
+
+    ex.textContent = cache==="off"
+      ? ("Step "+step+": producing position "+cur+". The model is called on all "+(cur+1)+" tokens, so it projects "+(cur+1)
+         +" key and value vectors. All but one of them are identical to vectors it computed on the previous step and discarded. "
+         +cum+" projected so far, against "+(cur+1)+" distinct positions.")
+      : ("Step "+step+": producing position "+cur+". Positions 0 to "+(cur-1)+" are read straight out of the cache, so only position "
+         +cur+" is projected. "+cum+" projected so far, which is exactly one per position: the prompt during prefill, then one per generated token.");
+  }
+
+  seg(root,"data-cache",v=>{cache=v;draw();});
+  $("#w2-step").addEventListener("input",e=>{step=+e.target.value;draw();});
+  draw();
+})();
+
+/* ================= Figure 3: cache memory ================= */
+(function(){
+  const root=$("#w4"), svg=$("#w4-svg"), ex=$("#w4-explain");
+  if(!root||!svg) return;
+  /* layers, kv heads, head dim, max trained context, derived param count */
+  const MODELS=[
+    {name:"Llama 2 7B",   L:32, kv:32, dh:128, maxctx:4096,   params:6.74e9,  attn:"multi-head, 32 query heads and 32 key/value heads"},
+    {name:"Llama 3.1 8B", L:32, kv:8,  dh:128, maxctx:131072, params:8.03e9,  attn:"grouped-query, 32 query heads sharing 8 key/value heads"},
+    {name:"Llama 3 70B",  L:80, kv:8,  dh:128, maxctx:8192,   params:70.55e9, attn:"grouped-query, 64 query heads sharing 8 key/value heads"}
+  ];
+  const CTX=[1024,2048,4096,8192,16384,32768,65536,131072];
+  const BAT=[1,2,4,8,16,32];
+  let mi=0, ci=3, bi=0;
+  const GB=1073741824;
+
+  function draw(){
+    const m=MODELS[mi], n=CTX[ci], b=BAT[bi];
+    const perTok=2*m.L*m.kv*m.dh*2;
+    const cache=perTok*n*b/GB;
+    const weights=m.params*2/GB;
+    const hi=Math.max(cache,weights)*1.18;
+
+    const LX=150, RX=670, TY=44, H=52, GAP=34;
+    const sc=v=>(RX-LX)*v/hi;
+    let g="";
+    [["model weights (fp16)",weights,C.base1,"#cfc9b4"],["KV cache",cache,C.blue,"#d7e7f4"]].forEach(function(row,k){
+      const y=TY+k*(H+GAP);
+      g+='<text x="'+(LX-14)+'" y="'+(y+H/2+4)+'" text-anchor="end" font-family="var(--mono)" font-size="11.5" fill="'+C.base1+'">'+row[0]+'</text>';
+      g+='<rect x="'+LX+'" y="'+y+'" width="'+(RX-LX)+'" height="'+H+'" rx="2" fill="'+C.base2+'" opacity="0.5"/>';
+      g+='<rect x="'+LX+'" y="'+y+'" width="'+Math.max(2,sc(row[1]))+'" height="'+H+'" rx="2" fill="'+row[3]+'" stroke="'+row[2]+'"/>';
+      const lx=LX+Math.max(2,sc(row[1]))+10;
+      const inside = lx>RX-90;
+      g+='<text x="'+(inside?RX-10:lx)+'" y="'+(y+H/2+5)+'" text-anchor="'+(inside?"end":"start")+'" font-family="var(--mono)" '
+        +'font-size="14" fill="'+row[2]+'">'+fmt(row[1],2)+' GB</text>';
+    });
+    const y2=TY+2*(H+GAP)-4;
+    g+='<text x="'+LX+'" y="'+y2+'" font-family="var(--mono)" font-size="11" fill="'+C.base1+'">'
+      +m.name+' \u00b7 '+m.L+' layers \u00b7 '+m.kv+' kv heads \u00b7 head dim '+m.dh+'</text>';
+    g+='<text x="'+LX+'" y="'+(y2+18)+'" font-family="var(--mono)" font-size="11" fill="'+C.base1+'">'
+      +'context '+lab(n)+' \u00b7 batch '+b+' \u00b7 '+fmt(perTok/1024,1)+' KB per token</text>';
+    svg.innerHTML=g;
+
+    $("#w4-per").textContent=fmt(perTok/1024,1)+" KB";
+    $("#w4-tot").textContent=fmt(cache,2)+" GB";
+    $("#w4-pct").textContent=Math.round(cache/weights*100)+"%";
+    $("#w4-pct").className = cache>weights ? "hot":"cool";
+    $("#w4-tot").className = cache>weights ? "hot":"cool";
+    $("#w4-ctxout").textContent=lab(n);
+    $("#w4-batout").textContent=b;
+
+    const over = n>m.maxctx ? " Note that "+lab(n)+" exceeds this model's trained context of "+lab(m.maxctx)+", so this point is shown for scale only." : "";
+    ex.textContent = m.name+" uses "+m.attn+", giving "+fmt(perTok/1024,1)+" KB of cache per token. "
+      + "At "+lab(n)+" context and batch "+b+" the cache is "+fmt(cache,2)+" GB against "+fmt(weights,2)+" GB of fp16 weights, "
+      + (cache>weights ? "so the cache is the larger allocation." : "so the weights still dominate.")
+      + over;
+  }
+  function lab(n){ return n>=1024 ? (n/1024)+"k" : String(n); }
+
+  seg(root,"data-model",v=>{mi=+v;draw();});
+  $("#w4-ctx").addEventListener("input",e=>{ci=+e.target.value;draw();});
+  $("#w4-bat").addEventListener("input",e=>{bi=+e.target.value;draw();});
+  draw();
+})();
+
+/* ================= Figure 4: dependency depth ================= */
+(function(){
+  const root=$("#w5"), svg=$("#w5-svg"), ex=$("#w5-explain");
+  if(!root||!svg) return;
+  let T=8, L=3, hover=null;
+
+  /* Ready-round per node, from the dependency structure itself.
+     Inputs occupy round 1. A decoder node reads layer inputs at every position
+     up to its own, all of which finish together. An RNN node additionally waits
+     on its own left neighbour. */
+  function rounds(kind){
+    const r=[];
+    r.push(new Array(T).fill(1));
+    for(let l=1;l<=L;l++){
+      const row=new Array(T);
+      for(let t=0;t<T;t++){
+        row[t] = kind==="attn"
+          ? r[l-1][t]+1
+          : Math.max(r[l-1][t], t>0?row[t-1]:0)+1;
+      }
+      r.push(row);
+    }
+    return r;
+  }
+
+  function ramp(f){
+    /* light blue at round 0, orange at the deepest round: orange means waiting */
+    const a=[215,231,244], b=[203,75,22];
+    const c=a.map((v,i)=>Math.round(v+(b[i]-v)*Math.pow(f,0.85)));
+    return "rgb("+c[0]+","+c[1]+","+c[2]+")";
+  }
+
+  function draw(){
+    const A=rounds("attn"), R=rounds("rnn");
+    const maxA=Math.max.apply(null,A[L]), maxR=Math.max.apply(null,R[L]);
+    const maxAll=Math.max(maxA,maxR);
+    const PW=310, PX=[42,388], TY=54;
+    const cw=Math.min(26,(PW-30)/T), ch=Math.min(30,190/(L+1));
+    let g="";
+
+    [["decoder (masked self-attention)",A,PX[0],maxA],["recurrent network",R,PX[1],maxR]].forEach(function(p){
+      const title=p[0], M=p[1], ox=p[2], mx=p[3];
+      g+='<text x="'+(ox+PW/2)+'" y="24" text-anchor="middle" font-family="var(--mono)" font-size="11.5" fill="'+C.base01+'">'+title+'</text>';
+      g+='<text x="'+(ox+PW/2)+'" y="42" text-anchor="middle" font-family="var(--mono)" font-size="11" fill="'+(mx>maxAll*0.6?C.orange:C.blue)+'">'
+        +mx+' rounds</text>';
+      for(let l=0;l<=L;l++){
+        const y=TY+(L-l)*ch;
+        g+='<text x="'+(ox-8)+'" y="'+(y+4)+'" text-anchor="end" font-family="var(--mono)" font-size="9.5" fill="'+C.base1+'">'
+          +(l===0?"in":"L"+l)+'</text>';
+        for(let t=0;t<T;t++){
+          const x=ox+t*cw+cw/2;
+          const f=(M[l][t]-1)/Math.max(1,maxAll-1);
+          g+='<circle cx="'+x+'" cy="'+y+'" r="'+Math.min(8,cw/2-1.5)+'" fill="'+ramp(f)+'" stroke="rgba(0,0,0,.08)"/>';
+        }
+      }
+      /* position axis */
+      g+='<text x="'+(ox+PW/2-20)+'" y="'+(TY+L*ch+34)+'" text-anchor="middle" font-family="var(--mono)" font-size="10.5" fill="'+C.base1+'">position 0 \u2192 '+(T-1)+'</text>';
+    });
+
+    /* ramp legend */
+    const lgx=250, lgy=300;
+    for(let i=0;i<=20;i++){
+      g+='<rect x="'+(lgx+i*8)+'" y="'+lgy+'" width="8" height="10" fill="'+ramp(i/20)+'"/>';
+    }
+    g+='<text x="'+(lgx-8)+'" y="'+(lgy+9)+'" text-anchor="end" font-family="var(--mono)" font-size="10" fill="'+C.base1+'">round 1</text>';
+    g+='<text x="'+(lgx+176)+'" y="'+(lgy+9)+'" font-family="var(--mono)" font-size="10" fill="'+C.base1+'">round '+maxAll+'</text>';
+
+    svg.innerHTML=g;
+
+    $("#w5-a").textContent=maxA;
+    $("#w5-r").textContent=maxR;
+    $("#w5-ratio").textContent=fmt(maxR/maxA,1)+"\u00d7";
+    $("#w5-tout").textContent=T;
+    $("#w5-lout").textContent=L;
+    ex.textContent = "At length "+T+" with "+L+" layer"+(L===1?"":"s")+", the decoder finishes in "+maxA
+      +" rounds and the recurrent network needs "+maxR+". The decoder's count is layers plus one and does not move when you lengthen the sequence, "
+      + "because a whole layer becomes computable at once. The recurrent count is length plus layers, because each position waits on the one before it. "
+      + "Stretch the sequence and only one of these grows.";
+  }
+
+  $("#w5-t").addEventListener("input",e=>{T=+e.target.value;draw();});
+  $("#w5-l").addEventListener("input",e=>{L=+e.target.value;draw();});
+  draw();
+})();
+
+/* ---------------- KaTeX ---------------- */
+(function(){
+  let done=false;
+  function render(){
+    if(done||!window.katex) return;
+    done=true;
+    document.querySelectorAll("[data-tex]").forEach(function(el){
+      const tex=el.getAttribute("data-tex");
+      try{
+        katex.render(tex, el, {displayMode:el.classList.contains("math-d"), throwOnError:true, strict:"error"});
+        el.classList.add("rendered");
+      }catch(e){
+        console.warn("KaTeX failed on:", tex, e.message);
+      }
+    });
+  }
+  if(document.readyState!=="loading") render();
+  document.addEventListener("DOMContentLoaded",render);
+  window.addEventListener("load",render);
+})();
+
+/* ---------------- python highlighting ---------------- */
+(function(){
+  const rx=/(#[^\n]*)|("""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|\b(\d+\.?\d*)\b|\b(import|from|as|with|for|in|if|else|elif|return|def|class|None|True|False|not|and|or|lambda|while|try|except|pass|print)\b|\b([A-Za-z_]\w*)(?=\s*\()/g;
+  const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  $$("pre code.py").forEach(el=>{
+    const src=el.textContent;
+    el.innerHTML=esc(src).replace(rx,(m,com,str,num,kw,fn)=>{
+      const c=com?"c-com":str?"c-str":num?"c-num":kw?"c-kw":"c-fn";
+      return '<span class="'+c+'">'+m+'</span>';
+    });
+  });
+})();
+
+})();
+</script>
