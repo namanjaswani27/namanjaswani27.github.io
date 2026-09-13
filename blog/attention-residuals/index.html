@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attention residuals: a learned weighting over layers</title>
+<meta name="description" content="Standard residuals add every layer's output with weight one. Attention residuals put a softmax over depth instead, and block attention residuals make that affordable.">
+<meta name="author" content="Naman Jaswani">
+<meta name="theme-color" content="#fdf6e3">
+<link rel="canonical" href="https://namanjaswani27.github.io/blog/attention-residuals/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Attention residuals: a learned weighting over layers">
+<meta property="og:description" content="Standard residuals add every layer's output with weight one. Attention residuals put a softmax over depth instead, and block attention residuals make that affordable.">
+<meta property="og:url" content="https://namanjaswani27.github.io/blog/attention-residuals/">
+<meta property="article:published_time" content="2026-09-13">
+<meta name="twitter:card" content="summary">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.css" integrity="sha384-u1zONI5gPXUx0UKI62c75/zww972y0v2rSK5ZYlVdS6xEuWDeZWUI66v6t1gvlXJ" crossorigin="anonymous">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.18.4/dist/katex.min.js" integrity="sha384-ykMNcWQhhTUb0YV9SPpPUFURHZ+tWmubkakGBP+OgNK/UXdO2gtzglWx0Rj9hnO3" crossorigin="anonymous"></script>
+
+<style>
+/* Base stylesheet for a blog post. Paste inline inside <style> in the post file.
+   Solarized Light palette, IBM Plex type, hairline rules. Shipped verbatim on
+   namanjaswani27.github.io. */
+
+:root{
+  /* Solarized Light, by Ethan Schoonover */
+  --base3:#fdf6e3; --base2:#eee8d5; --base1:#93a1a1; --base0:#839496;
+  --base00:#657b83; --base01:#586e75; --base02:#073642; --base03:#002b36;
+  --yellow:#b58900; --orange:#cb4b16; --red:#dc322f; --magenta:#d33682;
+  --violet:#6c71c4; --blue:#268bd2; --cyan:#2aa198; --green:#859900;
+
+  --sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono","SF Mono",ui-monospace,Menlo,Consolas,monospace;
+
+  --measure:68ch;
+  --hair:#e2dbc5;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--base3); color:var(--base00);
+  font-family:var(--sans); font-size:19px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:#e4e9d6}
+
+/* ---------- chrome ---------- */
+.progress{position:fixed; top:0; left:0; right:0; height:4px; z-index:200;
+          background:var(--hair); pointer-events:none}
+.progress>div{height:100%; width:0; background:var(--blue)}
+
+.bar{
+  position:sticky; top:0; z-index:50;
+  display:flex; gap:.75rem; align-items:center; flex-wrap:wrap;
+  padding:.6rem clamp(1rem,5vw,3rem);
+  background:rgba(253,246,227,.94); backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--hair);
+  font-family:var(--mono); font-size:12px; color:var(--base1);
+}
+.bar b{color:var(--base01); font-weight:500}
+.bar .spacer{flex:1}
+.bar a{color:var(--base01); text-decoration:none}
+.bar a:hover{color:var(--blue)}
+
+.wrap{max-width:var(--measure); margin:0 auto; padding:0 clamp(1rem,5vw,2rem)}
+.wide{max-width:min(1100px,94vw); margin:0 auto; padding:0 clamp(1rem,4vw,2rem)}
+
+/* ---------- hero ---------- */
+header.hero{padding:clamp(2.6rem,8vh,5rem) 0 1.4rem}
+.eyebrow{
+  font-family:var(--mono); font-size:12px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--base1); margin:0 0 1.2rem;
+}
+h1{
+  font-family:var(--sans); font-weight:600;
+  font-size:clamp(2rem,5.5vw,3rem); line-height:1.12;
+  letter-spacing:-.028em; color:var(--base01); margin:0 0 .9rem;
+}
+h1 em{font-style:normal; color:var(--blue)}
+.deck{
+  font-size:clamp(1.12rem,2.4vw,1.32rem); line-height:1.5; font-weight:400;
+  color:var(--base00); max-width:52ch; margin:0 0 1.6rem;
+}
+.meta{
+  font-family:var(--mono); font-size:12px; color:var(--base1);
+  display:flex; gap:.5rem 1rem; flex-wrap:wrap; align-items:center;
+  padding-top:1rem; border-top:1px solid var(--hair);
+}
+.tag{color:var(--cyan)}
+
+/* ---------- body type ---------- */
+main{padding-bottom:5rem}
+h2{
+  font-family:var(--sans); font-weight:600; font-size:1.3rem;
+  letter-spacing:-.015em; color:var(--base01);
+  margin:3.4rem 0 1rem; padding-top:1.1rem;
+  border-top:1px solid var(--hair); scroll-margin-top:4rem;
+}
+h3{
+  font-family:var(--sans); font-weight:600; font-size:1.12rem;
+  letter-spacing:-.01em; color:var(--base01); margin:2.2rem 0 .6rem;
+}
+p{margin:0 0 1.1rem}
+.lede{font-size:1.06em; color:var(--base01)}
+a{color:var(--blue); text-decoration-thickness:1px; text-underline-offset:2px}
+a:hover{color:var(--cyan)}
+strong{color:var(--base01); font-weight:600}
+em{font-style:italic}
+code{
+  font-family:var(--mono); font-size:.85em; color:var(--base01);
+  background:var(--base2); padding:.08em .3em; border-radius:2px;
+}
+ul,ol{margin:0 0 1.1rem; padding-left:1.35rem}
+li{margin:.32rem 0}
+li::marker{color:var(--base1)}
+hr{border:0; border-top:1px solid var(--hair); margin:2.6rem 0}
+
+.contents{
+  font-family:var(--mono); font-size:13.5px; line-height:2;
+  margin:2.2rem 0; padding:0;
+}
+.contents a{color:var(--base00); text-decoration:none; display:block}
+.contents a:hover{color:var(--blue)}
+.contents span{color:var(--base1); margin-right:.7rem}
+
+/* the one recurring rule device, reserved for equations */
+.eq{
+  background:var(--base2); border-left:2px solid var(--blue);
+  padding:1.1rem 1.15rem; margin:1.7rem 0; overflow-x:auto; color:var(--base01);
+}
+.math-d{display:block; font-family:var(--mono); font-size:14px; white-space:pre; line-height:1.85}
+.math{font-family:var(--mono); font-size:.86em; white-space:nowrap}
+.math-d.rendered,.math.rendered{font-family:inherit; white-space:normal; font-size:inherit}
+.katex{color:var(--base01); font-size:1.04em}
+.math.rendered .katex{font-size:1em}
+.katex-display{margin:0; padding:.1rem 0; overflow-x:auto; overflow-y:hidden; text-align:left}
+.katex-display>.katex{display:inline-block; text-align:left; white-space:normal}
+
+/* asides: hairlines and a small label, no tinted panels */
+.note{
+  font-size:.95em; line-height:1.6; color:var(--base00);
+  border-top:1px solid var(--hair); border-bottom:1px solid var(--hair);
+  padding:.95rem 0; margin:1.9rem 0;
+}
+.note b{color:var(--base01); font-weight:600}
+.note>b:first-child{
+  display:block; font-family:var(--mono); font-weight:500;
+  font-size:11.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--base1); margin-bottom:.4rem;
+}
+
+.srcs{margin:.6rem 0 0; padding-left:1.1rem; font-size:.95em; line-height:1.5}
+.srcs li{margin:.42rem 0}
+.srcs li>span{display:block; color:var(--base1); font-size:.9em}
+
+.pull{
+  font-family:var(--mono); font-weight:500;
+  font-size:clamp(1.25rem,3.2vw,1.7rem); line-height:1.42;
+  letter-spacing:-.03em; color:var(--base01);
+  max-width:30ch; margin:2.7rem 0;
+}
+.pull em{font-style:normal; color:var(--orange)}
+
+.hint{
+  font-family:var(--mono); font-size:12.5px; line-height:1.55;
+  color:var(--orange); margin:0 0 .85rem;
+  display:flex; gap:.45rem; align-items:baseline;
+}
+.hint::before{content:"\2192"; flex:none}
+
+pre{
+  background:var(--base2); border-radius:2px;
+  padding:1rem 1.05rem; overflow-x:auto; margin:1.6rem 0;
+  font-family:var(--mono); font-size:13.5px; line-height:1.7;
+}
+pre code{background:none; padding:0; font-size:inherit; color:var(--base00)}
+.c-com{color:var(--base1)}
+.c-str{color:var(--cyan)}
+.c-num{color:var(--magenta)}
+.c-kw{color:var(--green)}
+.c-fn{color:var(--blue)}
+
+/* ---------- figures ---------- */
+figure{margin:2.4rem 0}
+.fig{border:1px solid var(--hair); border-radius:2px; background:#fcf7e6;
+     padding:1rem clamp(.75rem,2.4vw,1.25rem) 1.15rem}
+.fig-head{
+  display:flex; gap:.7rem; align-items:baseline; flex-wrap:wrap;
+  font-family:var(--mono); font-size:11.5px; color:var(--base1);
+  padding-bottom:.85rem; margin-bottom:1rem; border-bottom:1px solid var(--hair);
+}
+.fig-head b{color:var(--base01); font-weight:500}
+figcaption{
+  font-size:.9em; line-height:1.6; color:var(--base1);
+  margin-top:.85rem; max-width:74ch;
+}
+figcaption b{color:var(--base00); font-weight:600}
+
+.controls{display:flex; gap:.4rem; flex-wrap:wrap; margin-bottom:.9rem}
+button.seg{
+  font-family:var(--mono); font-size:12px; color:var(--base00);
+  background:transparent; border:1px solid #d9d1b8; border-radius:2px;
+  padding:.32rem .68rem; cursor:pointer; transition:background .12s,color .12s;
+}
+button.seg:hover{background:var(--base2); color:var(--base01)}
+button.seg[aria-pressed="true"]{background:var(--base01); border-color:var(--base01); color:var(--base3)}
+button.seg:focus-visible,input:focus-visible{outline:2px solid var(--violet); outline-offset:2px}
+.ctl-label{font-family:var(--mono); font-size:11.5px; color:var(--base1); align-self:center; margin-right:.15rem}
+
+.sliders{display:grid; gap:.3rem}
+.srow{display:grid; grid-template-columns:8ch 1fr 5ch; gap:.65rem; align-items:center;
+      font-family:var(--mono); font-size:12.5px}
+.srow .tk{color:var(--base01); text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.srow .tk.sink{color:var(--orange)}
+.srow output{color:var(--base1); text-align:right; font-variant-numeric:tabular-nums}
+input[type=range]{width:100%; accent-color:var(--base01); height:1.1rem}
+
+.readout{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); gap:.65rem;
+  font-family:var(--mono); margin-top:1rem; padding-top:.9rem; border-top:1px solid var(--hair);
+}
+.stat span{display:block; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--base1)}
+.stat b{font-size:1.3rem; font-weight:500; color:var(--base01); font-variant-numeric:tabular-nums}
+.stat b.hot{color:var(--orange)}
+.stat b.cool{color:var(--blue)}
+.stat i{font-style:normal; font-size:11px; color:var(--base1); display:block; line-height:1.4; margin-top:.1rem}
+
+.explain{
+  font-family:var(--mono); font-size:13px; line-height:1.65;
+  color:var(--base00); margin-top:.85rem; padding-top:.75rem;
+  border-top:1px solid var(--hair); min-height:3.6em;
+}
+
+svg{display:block; max-width:100%; height:auto}
+.tt{
+  position:fixed; pointer-events:none; opacity:0; transition:opacity .1s;
+  font-family:var(--mono); font-size:11px; background:var(--base02); color:var(--base3);
+  padding:.28rem .48rem; border-radius:2px; z-index:99; white-space:nowrap;
+}
+
+.cachestrip{display:flex; flex-wrap:wrap; gap:3px; margin:.35rem 0 0}
+.tokbox{
+  font-family:var(--mono); font-size:10.5px; width:2rem; height:1.6rem;
+  display:grid; place-items:center; border-radius:2px;
+  background:var(--base2); color:#c4bfa9; border:1px solid transparent;
+  transition:background .15s,color .15s;
+}
+.tokbox.win{background:#d7e7f4; color:var(--blue); border-color:#bdd9ed}
+.tokbox.sink{background:#f7e1d2; color:var(--orange); border-color:#eccbb2}
+.tokbox.cur{outline:2px solid var(--violet); outline-offset:1px}
+
+.verdict{
+  font-family:var(--mono); font-size:12.5px; line-height:1.6;
+  margin-top:.95rem; padding-top:.8rem; border-top:1px solid var(--hair);
+}
+.verdict.bad{color:#a2261f}
+.verdict.good{color:#5f6b1a}
+
+footer a{color:var(--base00)}
+footer{border-top:1px solid var(--hair); padding:1.8rem 0 3.5rem;
+       font-family:var(--mono); font-size:12px; color:var(--base1)}
+
+@media (max-width:560px){
+  body{font-size:17.5px}
+  .srow{grid-template-columns:6.5ch 1fr 4.5ch; gap:.45rem}
+  .tokbox{width:1.7rem; height:1.4rem; font-size:9px}
+  .katex{font-size:.96em}
+}
+@media (prefers-reduced-motion:reduce){ *{animation:none!important; transition:none!important} }
+
+/* post-specific */
+.eqfig{display:grid; grid-template-columns:minmax(0,1.25fr) minmax(200px,.75fr); gap:1.4rem 2rem; align-items:center; margin:1.6rem 0 .4rem}
+.eqfig .eq{margin:0}
+.eq-grid{display:grid; grid-template-columns:max-content max-content 1fr; column-gap:.9rem; row-gap:.55rem; align-items:baseline}
+.eq-grid .math{white-space:nowrap; font-size:.92em}
+.eq-grid .math.rendered .katex{font-size:1.06em}
+.eq-grid em{font-family:var(--mono); font-style:normal; font-size:11.5px; color:var(--base1); line-height:1.35}
+.layer-diagram{width:100%; max-width:300px; margin:0 auto}
+.block-diagram{max-width:340px}
+.eqfig-cap{font-family:var(--mono); font-size:12.5px; color:var(--base1); line-height:1.55; max-width:var(--measure); margin:0 auto 1.8rem; padding:0 0 .2rem}
+.eqfig-cap b{color:var(--base00); font-weight:600}
+@media (max-width:760px){.eqfig{grid-template-columns:1fr} .eq-grid{grid-template-columns:max-content 1fr} .eq-grid em{grid-column:1/-1; margin-top:-.3rem; padding-left:.2rem}}
+
+.sliders{margin:.2rem 0 .9rem}
+.srow{font-family:var(--mono); font-size:12px}
+.srow input{width:100%}
+.legend{display:flex; gap:1.1rem; flex-wrap:wrap; font-family:var(--mono); font-size:11.5px; color:var(--base1); margin:.2rem 0 .6rem}
+.legend i{display:inline-block; width:18px; height:3px; vertical-align:middle; margin-right:.4rem; border-radius:2px}
+</style>
+
+<div class="progress" aria-hidden="true"><div id="progress-bar"></div></div>
+
+<div class="bar">
+  <a href="/">namanjaswani27.github.io</a> <span>/</span> <a href="/blog/">blog</a>
+  <span class="spacer"></span>
+  <span>13 Sep 2026</span>
+</div>
+
+<div class="wrap">
+<header class="hero">
+  <p class="eyebrow">Architecture notes</p>
+  <h1>Attention residuals: a <em>learned weighting</em> over layers</h1>
+  <p class="deck">Standard residual connections add every layer's output with weight 1. Attention residuals replace this with a softmax over earlier layers. Block attention residuals keep the memory cost constant.</p>
+  <div class="meta">
+    <span>Naman Jaswani</span><span>&middot;</span><span>13 September 2026</span><span>&middot;</span><span>~7 min</span>
+    <span class="tag">transformers</span><span class="tag">residuals</span><span class="tag">architecture</span>
+  </div>
+</header>
+</div>
+
+<main>
+<div class="wrap">
+
+<p class="lede">In a standard transformer, the hidden state at layer L is the input embedding plus the output of every sublayer below it, added together with weight 1 each. A layer cannot give more weight to the earlier layers that matter to it and less to the ones that do not.</p>
+
+<p>The Kimi team's paper on attention residuals (March 2026) replaces this fixed sum with a learned softmax over the earlier outputs. This post covers the two problems with the fixed sum, the fix, what the fix costs in memory, and the block version that keeps that cost constant.</p>
+
+<nav class="contents">
+  <a href="#stream"><span>01</span>The residual stream, written out</a>
+  <a href="#issues"><span>02</span>Two things wrong with weight one</a>
+  <a href="#attnres"><span>03</span>Attention over depth</a>
+  <a href="#cost"><span>04</span>What it costs to keep every layer alive</a>
+  <a href="#block"><span>05</span>Block attention residuals</a>
+  <a href="#takeaway"><span>06</span>The takeaway</a>
+</nav>
+
+<h2 id="stream">The residual stream, written out</h2>
+
+<p>Take one pre-norm encoder layer. It reads the hidden state <span class="math" data-tex="h_{l-1}">h_{l-1}</span> coming from the layer below, runs multi-head attention on a normalised copy, adds the result back, runs the feed-forward network on a normalised copy of that, and adds again:</p>
+
+</div>
+
+<div class="wide">
+<div class="eqfig">
+  <div class="eq eq-grid" role="math" aria-label="One pre-norm encoder layer, four equations">
+    <span class="math" data-tex="A">A</span><span class="math" data-tex="= \mathrm{MultiHead}\big(\mathrm{LN}(h_{l-1})\big)">= MultiHead(LN(h_{l-1}))</span><em>attention branch</em>
+    <span class="math" data-tex="\mathrm{mid}">mid</span><span class="math" data-tex="= h_{l-1} + A">= h_{l-1} + A</span><em>first skip: add, weight 1</em>
+    <span class="math" data-tex="f">f</span><span class="math" data-tex="= \mathrm{FFNN}\big(\mathrm{LN}(\mathrm{mid})\big)">= FFNN(LN(mid))</span><em>feed-forward branch</em>
+    <span class="math" data-tex="h_l">h_l</span><span class="math" data-tex="= \mathrm{mid} + f">= mid + f</span><em>second skip: add, weight 1</em>
+    <span class="math" data-tex="h_l">h_l</span><span class="math" data-tex="= \colorbox{fff3b0}{$h_{l-1}$} + A + f">= [h_{l-1}] + A + f</span><em>the input passes through untouched</em>
+  </div>
+  <svg class="layer-diagram" viewBox="0 0 300 430" role="img" aria-label="Block diagram of one pre-norm encoder layer: input passes through LayerNorm and multi-head attention, is added back, then through LayerNorm and a feed-forward network, and is added back again">
+    <defs><marker id="ld-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#586e75"/></marker><marker id="ld-arr-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#268bd2"/></marker></defs>
+    <rect x="14" y="40" width="272" height="356" rx="6" fill="none" stroke="#e2dbc5"/>
+    <text x="24" y="60" font-family="IBM Plex Mono,monospace" font-size="11" fill="#93a1a1">layer l</text>
+    <!-- main path, bottom to top at x=150 -->
+    <text x="150" y="424" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12.5" fill="#586e75">h<tspan font-size="9" dy="3">l-1</tspan></text>
+    <line x1="150" y1="410" x2="150" y2="380" stroke="#586e75" stroke-width="1.4" marker-end="url(#ld-arr)"/>
+    <rect x="95" y="352" width="110" height="26" rx="3" fill="#eee8d5" stroke="#e2dbc5"/><text x="150" y="369" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">LayerNorm</text>
+    <line x1="150" y1="352" x2="150" y2="326" stroke="#586e75" stroke-width="1.4" marker-end="url(#ld-arr)"/>
+    <rect x="80" y="284" width="140" height="40" rx="3" fill="#eee8d5" stroke="#e2dbc5"/><text x="150" y="301" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">Multi-Head</text><text x="150" y="315" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">Attention</text>
+    <line x1="150" y1="284" x2="150" y2="254" stroke="#586e75" stroke-width="1.4" marker-end="url(#ld-arr)"/>
+    <text x="158" y="272" font-family="IBM Plex Mono,monospace" font-size="12" fill="#586e75">A</text>
+    <circle cx="150" cy="242" r="11" fill="#fdf6e3" stroke="#268bd2" stroke-width="1.6"/><text x="150" y="246.5" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#268bd2">+</text>
+    <line x1="150" y1="231" x2="150" y2="206" stroke="#586e75" stroke-width="1.4" marker-end="url(#ld-arr)"/>
+    <text x="142" y="216" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="12" fill="#586e75">mid</text>
+    <rect x="95" y="178" width="110" height="26" rx="3" fill="#eee8d5" stroke="#e2dbc5"/><text x="150" y="195" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">LayerNorm</text>
+    <line x1="150" y1="178" x2="150" y2="152" stroke="#586e75" stroke-width="1.4" marker-end="url(#ld-arr)"/>
+    <rect x="80" y="110" width="140" height="40" rx="3" fill="#eee8d5" stroke="#e2dbc5"/><text x="150" y="127" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">Feed-forward</text><text x="150" y="141" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">network</text>
+    <line x1="150" y1="110" x2="150" y2="84" stroke="#586e75" stroke-width="1.4" marker-end="url(#ld-arr)"/>
+    <text x="158" y="100" font-family="IBM Plex Mono,monospace" font-size="12" fill="#586e75">f</text>
+    <circle cx="150" cy="72" r="11" fill="#fdf6e3" stroke="#268bd2" stroke-width="1.6"/><text x="150" y="76.5" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="14" fill="#268bd2">+</text>
+    <line x1="150" y1="61" x2="150" y2="22" stroke="#586e75" stroke-width="1.4" marker-end="url(#ld-arr)"/>
+    <text x="150" y="14" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="12.5" fill="#586e75">h<tspan font-size="9" dy="3">l</tspan></text>
+    <!-- skip 1: h_{l-1} around attention into first plus -->
+    <path d="M150 396 L52 396 L52 242 L138 242" fill="none" stroke="#268bd2" stroke-width="1.6" marker-end="url(#ld-arr-b)"/>
+    <text x="46" y="322" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#268bd2">h<tspan font-size="8" dy="3">l-1</tspan></text>
+    
+    <!-- skip 2: mid around FFN into second plus -->
+    <path d="M150 226 L248 226 L248 72 L162 72" fill="none" stroke="#268bd2" stroke-width="1.6" marker-end="url(#ld-arr-b)"/>
+    <text x="254" y="150" font-family="IBM Plex Mono,monospace" font-size="10.5" fill="#268bd2">mid</text>
+    
+  </svg>
+</div>
+<p class="eqfig-cap"><b>One pre-norm layer.</b> Grey is the transforming path. Blue is the residual path: two skip connections, each added back with weight 1, so <span class="math" data-tex="h_{l-1}">h_{l-1}</span> reaches <span class="math" data-tex="h_l">h_l</span> without passing through any weights.</p>
+</div>
+
+<div class="wrap">
+
+<p>Look at the last line. Layer <span class="math" data-tex="l">l</span> does not change <span class="math" data-tex="h_{l-1}">h_{l-1}</span>. It passes it through and adds two vectors to it. Apply this across all layers and the final hidden state is the input embedding plus every sublayer output, each added with weight 1. Call the pair a layer adds <span class="math" data-tex="v_l = A_l + f_l">v_l = A_l + f_l</span>, and let <span class="math" data-tex="v_0 = h_0">v_0 = h_0</span> be the embedding:</p>
+
+<div class="eq"><span class="math-d" data-tex="h_L \;=\; \underbrace{h_0}_{v_0\ \text{(embedding)}} \;+\; \underbrace{(A_1+f_1)}_{v_1} \;+\; \underbrace{(A_2+f_2)}_{v_2} \;+\;\cdots\;+\; \underbrace{(A_L+f_L)}_{v_L} \;=\; h_0 \;+\; \sum_{i=1}^{L} 1\cdot v_i">h_L = h_0 + (A_1+f_1) + (A_2+f_2) + ... + (A_L+f_L) = h_0 + sum_{i=1}^{L} 1 * v_i</span></div>
+
+<p>Two problems follow from that fixed weight of 1.</p>
+
+<div class="note"><b>Pre-norm versus post-norm</b> The equations above are the pre-norm arrangement, where LayerNorm sits on the branch and the residual path is a clean sum. The original 2017 encoder was post-norm, with the norm applied after each addition, which re-scales the stream at every layer and keeps the hidden state from growing in the way described next. Modern LLMs are almost all pre-norm, and the paper names the problem accordingly: PreNorm dilution.</div>
+
+<h2 id="issues">Two things wrong with weight one</h2>
+
+<p><strong>The hidden state grows with depth.</strong> Adding <span class="math" data-tex="L">L</span> vectors with weight 1 gives a norm that can be as large as the sum of the individual norms. Unless the sublayer outputs cancel each other, <span class="math" data-tex="\lVert h_L \rVert">||h_L||</span> grows roughly linearly with <span class="math" data-tex="L">L</span>, and nothing before the final norm limits it. This also dilutes each layer's contribution: layer 40's output is added to a sum that already has 80 terms in it, so it is a smaller fraction of the total than layer 2's output was. To have the same influence, a later layer has to produce a larger output.</p>
+
+<p><strong>There is no weighting, so there is no selection.</strong> Every earlier output enters with the same weight, whatever the token or its content. If three of the 96 sublayer outputs carry the signal a layer needs and the other 93 do not, the layer still receives all 96 at equal strength and has to separate them itself. The paper's talk gives the intuition: ask fifty people a question and average all fifty answers with weight 1/50, and the two people who actually know the answer are lost in the average.</p>
+
+<h2 id="attnres">Attention over depth</h2>
+
+<p>The fix is to attend over the earlier outputs. Instead of the fixed sum, layer <span class="math" data-tex="l">l</span> computes a softmax-weighted combination of every <span class="math" data-tex="v_i">v_i</span> below it, with the weights depending on the content of each <span class="math" data-tex="v_i">v_i</span>:</p>
+
+<div class="eq"><span class="math-d" data-tex="h_l \;=\; \sum_{i=0}^{l-1} \alpha_{i\to l}\, v_i,\qquad \alpha_{i\to l} \;=\; \frac{\exp\!\big(w_l^{\top}\,\mathrm{RMSNorm}(v_i)\big)}{\sum_{j=0}^{l-1}\exp\!\big(w_l^{\top}\,\mathrm{RMSNorm}(v_j)\big)}">h_l = sum_{i=0}^{l-1} alpha_{i->l} v_i,   alpha_{i->l} = softmax_i( w_l . RMSNorm(v_i) )</span></div>
+
+<p>Here <span class="math" data-tex="d">d</span> is the model width: every <span class="math" data-tex="v_i">v_i</span> and every hidden state is a vector in <span class="math" data-tex="\mathbb{R}^d">R^d</span>. The query is one learned vector <span class="math" data-tex="w_l\in\mathbb{R}^d">w_l in R^d</span> per layer, the same size as the <span class="math" data-tex="v_i">v_i</span> it is dotted with, so it adds <span class="math" data-tex="d">d</span> parameters per layer. The keys are the normalised earlier outputs. The values are the earlier outputs themselves. This is ordinary attention applied over depth instead of over the sequence, and it is computed per token: two tokens at the same layer can weight the earlier layers differently.</p>
+
+<p>The softmax fixes both problems. Selection is what a softmax does. Bounded size takes one line: the weights are non-negative and sum to 1, so the result is a convex combination and its norm cannot exceed the largest input norm.</p>
+
+<div class="eq"><span class="math-d" data-tex="\Big\lVert \sum_{i} \alpha_{i\to l}\, v_i \Big\rVert \;\le\; \sum_i \alpha_{i\to l}\,\lVert v_i\rVert \;\le\; \max_i \lVert v_i \rVert \qquad\text{since } \alpha_{i\to l}\ge 0,\ \textstyle\sum_i \alpha_{i\to l}=1">|| sum_i alpha_i v_i || <= sum_i alpha_i ||v_i|| <= max_i ||v_i||   (alpha_i >= 0, sum_i alpha_i = 1)</span></div>
+
+<p class="pull">The softmax weights sum to 1, so the output is a <em>convex combination</em> and its norm is bounded by the largest input.</p>
+
+
+<div class="note"><b>What the sources are</b> My notes from the talk had the sum running over hidden states <span class="math" data-tex="h_i">h_i</span>. The paper attends over the sublayer <em>outputs</em> <span class="math" data-tex="v_i">v_i</span>, meaning what each layer added, not the running total. Under standard residuals <span class="math" data-tex="h_{l-1}=\sum_{i<l} v_i">h_{l-1} = sum_{i<l} v_i</span>, so the two readings coincide only for the old scheme. With learned weights they are different, and the outputs are the right choice: the running totals overlap heavily with each other, and attending over them would make the softmax weights nearly uniform. The paper also applies the mechanism twice per layer, once before the attention sublayer and once before the FFN, which is why 48 layers give 96 sources. The figures below draw a layer as one unit to keep the picture readable.</div>
+
+</div>
+
+<div class="wide">
+<figure>
+<div class="fig" id="w1">
+  <div class="fig-head"><b>Figure 1</b> <span>Where a layer's input comes from under each residual scheme</span></div>
+  <p class="hint">Hover any layer to see which earlier outputs it reads. Switch schemes with the buttons.</p>
+  <div class="controls" role="group" aria-label="Residual scheme">
+    <span class="ctl-label">scheme</span>
+    <button class="seg" data-scheme="std" aria-pressed="true">standard residual</button>
+    <button class="seg" data-scheme="full" aria-pressed="false">attention residual</button>
+    <button class="seg" data-scheme="block" aria-pressed="false">block attention residual</button>
+  </div>
+  <div class="legend"><span><i style="background:#268bd2"></i>fixed sum, weight 1</span><span><i style="background:#6c71c4"></i>learned softmax weight &alpha;</span><span><i style="background:#859900"></i>block summary</span></div>
+  <svg id="w1-svg" viewBox="0 0 880 420" role="img" aria-label="Six stacked transformer layers with arrows showing which earlier outputs feed each layer under standard, attention, and block attention residuals"></svg>
+  <div class="explain" id="w1-explain"></div>
+  <div class="readout">
+    <div class="stat"><span>vectors read by hovered layer</span><b id="w1-read" class="cool">1</b><i>distinct sources whose values enter the combination</i></div>
+    <div class="stat"><span>vectors kept alive at that depth</span><b id="w1-live" class="hot">1</b><i>per token, per layer, to be able to compute it</i></div>
+  </div>
+</div>
+<figcaption><b>Standard residuals read one vector, the running sum.</b> Attention residuals read every earlier output separately, with a weight each. Block attention residuals fold each finished block back into a plain sum and attend over the block summaries plus the partial current block. <span style="color:var(--base1)">The &alpha; values shown are illustrative, drawn from a fixed rule, not measured from a trained model.</span></figcaption>
+</figure>
+</div>
+
+<div class="wrap">
+<h2 id="cost">What it costs to keep every layer alive</h2>
+
+<p>The cost is memory. Under standard residuals, layer <span class="math" data-tex="l">l</span> needs exactly one vector from below, <span class="math" data-tex="h_{l-1}">h_{l-1}</span>. The earlier outputs are already summed into it and can be discarded. Under attention residuals, layer <span class="math" data-tex="l">l</span> needs all of <span class="math" data-tex="v_0,\dots,v_{l-1}">v_0, ..., v_{l-1}</span> as separate vectors, because the weights depend on the current token and are not known until the layer runs.</p>
+
+<div class="eq"><span class="math-d" data-tex="\text{sources read by layer } l \;=\; l \;\;(v_0,\dots,v_{l-1}),\qquad \text{total over depth} \;=\; \sum_{l=1}^{L} l \;=\; \frac{L(L+1)}{2}">sources read by layer l = l  (v_0 .. v_{l-1}),   total over depth = L(L+1)/2</span></div>
+
+<p>Memory per token grows from <span class="math" data-tex="d">d</span> floats (one vector) to <span class="math" data-tex="Ld">Ld</span> floats (<span class="math" data-tex="L">L</span> vectors) at the top layer. The extra compute is small: each dot product is <span class="math" data-tex="d">d</span> multiplies, which is negligible next to what a layer already does. The memory is the cost. When a model is split across devices with pipeline parallelism, every device has to pass all <span class="math" data-tex="L">L</span> vectors to the next one instead of the single vector <span class="math" data-tex="h_{l-1}">h_{l-1}</span>. This <span class="math" data-tex="O(Ld)">O(Ld)</span> cost is what block attention residuals remove.</p>
+
+</div>
+
+<div class="wide">
+<figure>
+<div class="fig" id="w2">
+  <div class="fig-head"><b>Figure 2</b> <span>Vectors each layer must keep, against depth</span></div>
+  <p class="hint">Move the slider to change the number of blocks. Hover the chart to read values at a given depth.</p>
+  <div class="sliders">
+    <div class="srow"><span class="tk">blocks N</span><input type="range" id="w2-N" min="1" max="16" step="1" value="8"><output id="w2-No">8</output></div>
+  </div>
+  <div class="legend"><span><i style="background:#cb4b16"></i>attention residual: L vectors</span><span><i style="background:#268bd2"></i>block attention residual: N vectors</span><span><i style="background:#93a1a1"></i>standard residual: 1 vector</span></div>
+  <svg id="w2-svg" viewBox="0 0 760 300" role="img" aria-label="Line chart of vectors kept per token against depth: attention residuals grow linearly with depth, block attention residuals stay flat at N, standard residuals stay at 1"></svg>
+  <div class="explain" id="w2-explain"></div>
+  <div class="readout">
+    <div class="stat"><span>at the hovered depth</span><b id="w2-L" class="cool">96</b><i>layers</i></div>
+    <div class="stat"><span>attention residual keeps</span><b id="w2-full" class="hot">96</b><i>vectors per token</i></div>
+    <div class="stat"><span>block attention residual keeps</span><b id="w2-block" class="cool">8</b><i>vectors per token</i></div>
+  </div>
+</div>
+<figcaption><b>Attention residuals keep one vector per earlier layer, so the count grows with depth. Block attention residuals keep one vector per block, so the count is fixed by N.</b> <span style="color:var(--base1)">Counts are per token at the deepest layer, one layer counted as one source. The block count assumes each block has at least two layers.</span></figcaption>
+</figure>
+</div>
+
+<div class="wrap">
+<h2 id="block">Block attention residuals</h2>
+
+<p>The block version keeps the learned weighting between groups of layers and drops it within a group. Split the <span class="math" data-tex="L">L</span> layers into <span class="math" data-tex="N">N</span> consecutive blocks. Inside a block, use the ordinary residual: add the outputs with weight 1 into a running partial sum <span class="math" data-tex="p_l">p_l</span>. When a block is complete, its partial sum becomes one fixed summary vector <span class="math" data-tex="b_n">b_n</span>. A layer then attends over the finished block summaries plus its own block's partial sum:</p>
+
+</div>
+
+<div class="wide">
+<div class="eqfig">
+  <div class="eq eq-grid" role="math" aria-label="Block attention residual, three equations">
+    <span class="math" data-tex="b_n">b_n</span><span class="math" data-tex="= \sum_{i \in \text{block } n} v_i">= sum over block n of v_i</span><em>summary of a finished block</em>
+    <span class="math" data-tex="p_l">p_l</span><span class="math" data-tex="= \sum_{i \in \text{current block},\ i<l} v_i">= sum of the current block so far</span><em>partial sum of the open block</em>
+    <span class="math" data-tex="h_l">h_l</span><span class="math" data-tex="= \sum_{n=0}^{N_l-1} \alpha_{n\to l}\, b_n \;+\; \alpha_{p\to l}\, p_l">= sum_n alpha_{n->l} b_n + alpha_{p->l} p_l</span><em>softmax over the N_l summaries and p_l</em>
+  </div>
+  <svg class="layer-diagram block-diagram" viewBox="0 0 340 480" role="img" aria-label="Block diagram of block attention residuals: layers are grouped into blocks summed with weight one into summaries b0 and b1 and a partial sum p; layer 6 takes a softmax-weighted combination of b0, b1 and p"><defs><marker id="bd-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#586e75"/></marker><marker id="bd-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#268bd2"/></marker><marker id="bd-v" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#6c71c4"/></marker><marker id="bd-gr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#859900"/></marker></defs><rect x="30" y="448" width="110" height="22" rx="3" fill="#eee8d5" stroke="#e2dbc5" stroke-width="1"/><text x="85.0" y="463.0" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">embedding v₀</text><rect x="30" y="414" width="110" height="22" rx="3" fill="#eee8d5" stroke="#e2dbc5" stroke-width="1"/><text x="85.0" y="429.0" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">layer 1 → v₁</text><rect x="30" y="380" width="110" height="22" rx="3" fill="#eee8d5" stroke="#e2dbc5" stroke-width="1"/><text x="85.0" y="395.0" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">layer 2 → v₂</text><rect x="30" y="320" width="110" height="22" rx="3" fill="#eee8d5" stroke="#e2dbc5" stroke-width="1"/><text x="85.0" y="335.0" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">layer 3 → v₃</text><rect x="30" y="286" width="110" height="22" rx="3" fill="#eee8d5" stroke="#e2dbc5" stroke-width="1"/><text x="85.0" y="301.0" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">layer 4 → v₄</text><rect x="30" y="226" width="110" height="22" rx="3" fill="#eee8d5" stroke="#e2dbc5" stroke-width="1"/><text x="85.0" y="241.0" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">layer 5 → v₅</text><rect x="22" y="372" width="126" height="106" rx="5" fill="none" stroke="#859900" stroke-width="1.6" opacity="1"/><rect x="22" y="278" width="126" height="72" rx="5" fill="none" stroke="#859900" stroke-width="1.6" opacity="1"/><rect x="22" y="218" width="126" height="38" rx="5" fill="none" stroke="#859900" stroke-width="1.1" stroke-dasharray="5 4" opacity="0.7"/><line x1="85.0" y1="448" x2="85.0" y2="437" stroke="#268bd2" stroke-width="1.4" marker-end="url(#bd-b)"/><line x1="85.0" y1="414" x2="85.0" y2="403" stroke="#268bd2" stroke-width="1.4" marker-end="url(#bd-b)"/><line x1="85.0" y1="320" x2="85.0" y2="309" stroke="#268bd2" stroke-width="1.4" marker-end="url(#bd-b)"/><rect x="176" y="414.0" width="100" height="22" rx="3" fill="#f3f4e3" stroke="#859900" stroke-width="1.4"/><text x="226" y="429.0" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#859900">b₀ = v₀+v₁+v₂</text><line x1="148" y1="425.0" x2="174" y2="425.0" stroke="#268bd2" stroke-width="1.4" marker-end="url(#bd-b)"/><rect x="176" y="303.0" width="100" height="22" rx="3" fill="#f3f4e3" stroke="#859900" stroke-width="1.4"/><text x="226" y="318.0" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#859900">b₁ = v₃+v₄</text><line x1="148" y1="314.0" x2="174" y2="314.0" stroke="#268bd2" stroke-width="1.4" marker-end="url(#bd-b)"/><rect x="176" y="226.0" width="100" height="22" rx="3" fill="#fdf6e3" stroke="#859900" stroke-width="1.4" stroke-dasharray="4 3"/><text x="226" y="241.0" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#859900">p = v₅ (so far)</text><line x1="148" y1="237.0" x2="174" y2="237.0" stroke="#268bd2" stroke-width="1.4" marker-end="url(#bd-b)"/><text x="152" y="421.0" text-anchor="start" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#268bd2">sum</text><text x="152" y="310.0" text-anchor="start" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#268bd2">sum</text><text x="152" y="233.0" text-anchor="start" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#268bd2">sum</text><text x="91.0" y="90" text-anchor="start" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6c71c4">h₆</text><rect x="30" y="50" width="110" height="22" rx="3" fill="#d7e7f4" stroke="#268bd2" stroke-width="1.6"/><text x="85.0" y="65.0" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="#586e75">layer 6 → v₆</text><line x1="85.0" y1="50" x2="85.0" y2="22" stroke="#586e75" stroke-width="1.4" marker-end="url(#bd-g)"/><text x="91.0" y="30" text-anchor="start" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#93a1a1">v₆ → p</text><path d="M276 425 C308 425,300 395,300 166" fill="none" stroke="#6c71c4" stroke-width="1.5" marker-end="url(#bd-v)"/><path d="M276 314 C308 314,300 284,300 166" fill="none" stroke="#6c71c4" stroke-width="1.5" marker-end="url(#bd-v)"/><path d="M276 237 C308 237,300 207,300 166" fill="none" stroke="#6c71c4" stroke-width="1.5" marker-end="url(#bd-v)"/><text x="308" y="418" text-anchor="start" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6c71c4">α₀</text><text x="308" y="307" text-anchor="start" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6c71c4">α₁</text><text x="308" y="230" text-anchor="start" font-family="IBM Plex Mono,monospace" font-size="10" fill="#6c71c4">αp</text><circle cx="300" cy="150" r="14" fill="#fdf6e3" stroke="#6c71c4" stroke-width="1.6"/><text x="300" y="154" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#6c71c4">Σα</text><text x="290" y="112" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#6c71c4">softmax over</text><text x="290" y="124" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#6c71c4">{b₀, b₁, p}</text><path d="M300 136 L300 96 L85 96 L85 74" fill="none" stroke="#6c71c4" stroke-width="1.5" marker-end="url(#bd-v)"/><text x="176" y="458" text-anchor="start" font-family="IBM Plex Mono,monospace" font-size="9.5" fill="#93a1a1">alive at layer 6: 3 vectors, not 6</text></svg>
+</div>
+<p class="eqfig-cap"><b>Block attention residuals, six layers in three blocks.</b> Blue additions inside a block are the ordinary residual sum with weight 1. Each finished block freezes to a green summary; the open block keeps a running partial sum. Layer 6 attends (violet) over the two summaries and the partial, so three vectors are alive instead of six.</p>
+</div>
+
+<div class="wrap">
+
+<p>Here <span class="math" data-tex="N_l">N_l</span> is the number of blocks completed below layer <span class="math" data-tex="l">l</span>. A layer in the last block reads <span class="math" data-tex="N-1">N-1</span> summaries plus its partial sum, so it keeps at most <span class="math" data-tex="N">N</span> vectors regardless of depth, and only that many cross a pipeline boundary. The paper uses <span class="math" data-tex="N=8">N = 8</span> and recovers most of the gain of the full scheme. Figure 2 shows the count against depth.</p>
+
+<p>What is lost is the ability to weight layers inside the same block differently. If layers 17 and 18 share a block, layer 20 sees only their sum. The paper's ablations show that most of the gain comes from choosing between blocks, and little from choosing between layers within a block.</p>
+
+<hr>
+
+<h2 id="takeaway">The takeaway</h2>
+
+<p>The residual connection is a weighted sum with all weights fixed at 1. Both of its problems, growth with depth and no selection, come from that fixed weight. Replacing it with a per-layer softmax fixes both: the softmax selects, and a convex combination is bounded by its largest term. The cost is memory: one state becomes <span class="math" data-tex="L">L</span> states, which matters under pipeline parallelism. The block version caps this at <span class="math" data-tex="N">N</span> states by giving up per-layer weighting inside a block. The paper finds eight blocks are enough.</p>
+
+<div class="note"><b>Sources</b>
+<ul class="srcs">
+<li><a href="https://arxiv.org/abs/2603.15031">Attention Residuals</a> <span>Kimi Team (Chen, Zhang, Su, and others), arXiv 2603.15031, March 2026. Defines AttnRes with a single learned pseudo-query per layer over RMSNorm-ed outputs, and Block AttnRes with N blocks reducing memory and communication from O(Ld) to O(Nd). Reports bounded output magnitudes and more uniform gradient norms; Block AttnRes matches a baseline trained with 1.25x more compute. Formulation checked against the official repository README (github.com/MoonshotAI/Attention-Residuals).</span></li>
+<li><a href="https://arxiv.org/abs/2002.04745">On Layer Normalization in the Transformer Architecture</a> <span>Xiong et al., ICML 2020. The standard reference for pre-norm versus post-norm behaviour.</span></li>
+</ul>
+</div>
+
+</div>
+<div class="wrap"><footer><a href="/blog/">More posts</a> &middot; <a href="/">namanjaswani27.github.io</a></footer></div>
+</main>
+
+<div class="tt" id="tt"></div>
+
+<script>
+/* Reusable script scaffolding for a post.
+   Sits in one <script> at the end of the body. Figure IIFEs slot in where marked.
+   Everything lives inside a single outer IIFE, so an exception in any figure aborts
+   the ones after it. That is a real failure mode: test every figure, not just the first. */
+
+(function(){
+"use strict";
+
+/* ---------------- scroll progress ---------------- */
+(function(){
+  const b=document.getElementById("progress-bar");
+  if(!b) return;
+  let queued=false;
+  function update(){
+    /* scrollingElement, not documentElement: in quirks mode the latter is always 0 */
+    const d=document.scrollingElement||document.documentElement;
+    const max=d.scrollHeight-d.clientHeight;
+    b.style.width=(max>0 ? (d.scrollTop/max)*100 : 0)+"%";
+    queued=false;
+  }
+  addEventListener("scroll",()=>{ if(!queued){queued=true; requestAnimationFrame(update);} },{passive:true});
+  addEventListener("resize",update);
+  update();
+})();
+
+/* ---------------- helpers ---------------- */
+const $=(s,r)=>(r||document).querySelector(s), $$=(s,r)=>[...(r||document).querySelectorAll(s)];
+const fmt=(x,n)=>x.toFixed(n===undefined?3:n);
+
+const tt=$("#tt");
+function showTT(e,txt){tt.textContent=txt;tt.style.opacity=1;tt.style.left=(e.clientX+12)+"px";tt.style.top=(e.clientY-30)+"px";}
+function hideTT(){tt.style.opacity=0;}
+
+/* segmented button groups: seg(root,"data-mode",value=>{ ... }) */
+function seg(root,attr,cb){
+  $$("button.seg["+attr+"]",root).forEach(b=>b.addEventListener("click",()=>{
+    $$("button.seg["+attr+"]",root).forEach(o=>o.setAttribute("aria-pressed",o===b));
+    cb(b.getAttribute(attr));
+  }));
+}
+
+/* ---------------- Figure 1: where a layer's input comes from ---------------- */
+(function(){
+  const root=$("#w1"), svg=$("#w1-svg"), explain=$("#w1-explain");
+  if(!root||!svg) return;
+  const BLUE="#268bd2", VIOLET="#6c71c4", GREEN="#859900", MUTED="#93a1a1", INK="#586e75", PANEL="#eee8d5", HAIR="#e2dbc5";
+  const L=6, BLOCK=2;                 /* six layers, blocks of two */
+  let scheme="std", hover=4;          /* hovered layer index 1..L; 0 = embedding */
+  /* geometry: boxes stacked bottom to top in the middle */
+  const bx=400, bw=170, bh=40, gap=16, y0=372;
+  const yOf=i=>y0-i*(bh+gap);         /* top-left y of unit i (0 = embedding) */
+  const cy=i=>yOf(i)+bh/2;
+  const blockOf=i=>Math.floor((i-1)/BLOCK);   /* for layers 1..L; embedding lives in block 0's partial */
+
+  /* illustrative alpha: fixed rule, decays away from a "favourite" source, then softmax */
+  function alphas(target,n){
+    const fav=Math.max(0,target-3);
+    const logit=[]; for(let i=0;i<n;i++) logit.push(-0.6*Math.abs(i-fav)+(i===0?0.4:0));
+    const m=Math.max(...logit), ex=logit.map(v=>Math.exp(v-m)), s=ex.reduce((a,b)=>a+b,0);
+    return ex.map(v=>v/s);
+  }
+  /* which block a unit belongs to; the embedding is the initial partial sum of block 0 */
+  const unitBlock=i=>i===0?0:blockOf(i);
+  const firstOfBlock=i=>i>=1&&(i-1)%BLOCK===0&&blockOf(i)>0;  /* block n>0 starts with no partial */
+  function sources(l){
+    if(scheme==="std") return {read:1,live:1};
+    if(scheme==="full") return {read:l,live:l};
+    const n=blockOf(l);
+    const r=firstOfBlock(l)?n:n+1;
+    return {read:r,live:r};
+  }
+  function arrowL(x1,y1,x2,y2,color,w){
+    const dx=-70-Math.abs(y1-y2)*0.18;
+    return '<path d="M'+x1+' '+y1+' C'+(x1+dx)+' '+y1+','+(x2+dx)+' '+y2+','+x2+' '+y2+'" fill="none" stroke="'+color+'" stroke-width="'+w+'" marker-end="url(#w1-arr-v)"/>';
+  }
+  function draw(){
+    const l=hover; let g="";
+    g+='<defs>'+[["b",BLUE],["v",VIOLET],["g",GREEN]].map(([k,c])=>'<marker id="w1-arr-'+k+'" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="'+c+'"/></marker>').join("")+'</defs>';
+    const nb=blockOf(l), hasP=!firstOfBlock(l);
+    const aB=alphas(nb+(hasP?1:0), nb+(hasP?1:0));   /* illustrative weights over summaries (+ partial) */
+    /* block brackets, embedding included in block 0 */
+    if(scheme==="block"){
+      for(let b=0;b<L/BLOCK;b++){
+        const top=yOf(b*BLOCK+BLOCK)-6, bot=(b===0?yOf(0):yOf(b*BLOCK+1))+bh+6;
+        const done=b<nb;
+        let lab='block '+b;
+        if(done) lab+='  \u2192 b'+b+'   \u03b1='+aB[b].toFixed(2);
+        else if(b===nb) lab+= hasP ? '  (partial p)  \u03b1='+aB[nb].toFixed(2) : '  (no partial yet)';
+        g+='<rect x="'+(bx-10)+'" y="'+top+'" width="'+(bw+20)+'" height="'+(bot-top)+'" rx="6" fill="none" stroke="'+GREEN+'" stroke-width="'+(done?2:1.2)+'"'+(done?'':' stroke-dasharray="5 4"')+' opacity="'+(done?1:0.6)+'"/>';
+        g+='<text x="'+(bx+bw+16)+'" y="'+((top+bot)/2+4)+'" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="'+(done||b===nb?GREEN:MUTED)+'">'+lab+'</text>';
+      }
+    }
+    /* spine: h_{i-1} -> layer i. std: everywhere. block: only inside a block. full: absent. */
+    if(scheme!=="full"){
+      for(let i=1;i<=L;i++){
+        if(scheme==="block"&&unitBlock(i-1)!==unitBlock(i)) continue;
+        const x=bx+bw/2, hot=(i===l), dim=i>l;
+        g+='<line x1="'+x+'" y1="'+(yOf(i-1))+'" x2="'+x+'" y2="'+(yOf(i)+bh+1)+'" stroke="'+BLUE+'" stroke-width="'+(hot?3:1.5)+'" opacity="'+(dim?0.35:1)+'" marker-end="url(#w1-arr-b)"/>';
+      }
+    }
+    let aF=[];
+    if(scheme==="full"){
+      aF=alphas(l,l);
+      for(let i=0;i<l;i++) g+=arrowL(bx,cy(i),bx,cy(l),VIOLET,1+aF[i]*3.5);
+      /* faint pattern: every layer reads every earlier unit */
+      for(let t=1;t<=L;t++){ if(t===l) continue;
+        for(let i=0;i<t;i++) g+='<path d="M'+(bx+bw)+' '+cy(i)+' C'+(bx+bw+60)+' '+cy(i)+','+(bx+bw+60)+' '+cy(t)+','+(bx+bw)+' '+cy(t)+'" fill="none" stroke="'+VIOLET+'" stroke-width="0.8" opacity="0.18"/>';
+      }
+    }
+    if(scheme==="block"){
+      for(let b=0;b<nb;b++){
+        const mid=(cy(b===0?0:b*BLOCK+1)+cy(b*BLOCK+BLOCK))/2;
+        g+=arrowL(bx-10,mid,bx,cy(l),VIOLET,1+aB[b]*3.5);
+      }
+    }
+    /* boxes */
+    for(let i=0;i<=L;i++){
+      const hot=i===l, isEmb=i===0;
+      const fill=hot?"#d7e7f4":(isEmb?"#f6efd9":PANEL);
+      const stroke=hot?BLUE:(scheme!=="std"&&i<l?VIOLET:HAIR);
+      const name=isEmb?'embedding  v\u2080':'layer '+i+'   \u2192 v'+sub(i);
+      g+='<g data-i="'+i+'" style="cursor:pointer"><rect x="'+bx+'" y="'+yOf(i)+'" width="'+bw+'" height="'+bh+'" rx="4" fill="'+fill+'" stroke="'+stroke+'" stroke-width="'+(hot?2:1.2)+'"/>';
+      if(scheme==="full"&&i<l) g+='<text x="'+(bx+8)+'" y="'+(cy(i)+4)+'" font-family="IBM Plex Mono,monospace" font-size="11" fill="'+VIOLET+'">\u03b1 '+aF[i].toFixed(2)+'</text>';
+      g+='<text x="'+(scheme==="full"&&i<l?bx+bw-10:bx+bw/2)+'" y="'+(cy(i)+4)+'" text-anchor="'+(scheme==="full"&&i<l?'end':'middle')+'" font-family="IBM Plex Mono,monospace" font-size="12.5" fill="'+INK+'">'+name+'</text></g>';
+    }
+    /* side formula */
+    const S=sources(l);
+    let f;
+    if(scheme==="std") f=["h"+sub(l-1)+" is one vector.","Inside it: v\u2080 + \u2026 + v"+sub(l-1)+",","each with weight 1, already","added together."];
+    else if(scheme==="full") f=["layer "+l+" reads "+l+" separate","vectors v\u2080 \u2026 v"+sub(l-1)+",","weights them with a softmax,","then sums."];
+    else f=["layer "+l+" reads "+nb+" block summar"+(nb===1?"y":"ies"), hasP?"plus the partial sum p of":"and nothing else: its block","its own block: "+S.read+" vector"+(S.read!==1?"s":"")+",","regardless of depth."];
+    if(scheme==="block"&&!hasP) f[2]="has just begun: "+S.read+" vector"+(S.read!==1?"s":"")+",";
+    f.forEach((t,k)=>{ g+='<text x="20" y="'+(40+k*18)+'" font-family="IBM Plex Mono,monospace" font-size="12" fill="'+(k===0?INK:MUTED)+'">'+t+'</text>'; });
+    svg.innerHTML=g;
+    $$("g[data-i]",svg).forEach(el=>{
+      el.addEventListener("mouseenter",()=>{const i=+el.getAttribute("data-i"); if(i>=1){hover=i;draw();}});
+      el.addEventListener("click",()=>{const i=+el.getAttribute("data-i"); if(i>=1){hover=i;draw();}});
+    });
+    $("#w1-read").textContent=S.read;
+    $("#w1-live").textContent=S.live;
+    explain.textContent = scheme==="std"
+      ? "Layer "+l+" receives h"+sub(l-1)+" only. Every earlier output is in there with coefficient 1, and layer "+l+" cannot re-weight them."
+      : scheme==="full"
+      ? "Layer "+l+" attends over v\u2080 \u2026 v"+sub(l-1)+" with one learned query vector; each earlier output must still be in memory as its own tensor."
+      : (hasP
+        ? "Layer "+l+" attends over the finished block summaries and the running partial sum of its own block. Within a block the outputs are added with weight 1, as before."
+        : "Layer "+l+" opens a new block, so there is no partial sum yet; it attends over the finished block summaries alone.");
+  }
+  function sub(n){return String.fromCharCode(0x2080+n);}
+  seg(root,"data-scheme",v=>{scheme=v;draw();});
+  draw();
+})();
+
+/* ---------------- Figure 2: vectors kept per token, against depth ---------------- */
+(function(){
+  const root=$("#w2"), svg=$("#w2-svg"), explain=$("#w2-explain");
+  if(!root||!svg) return;
+  const ORANGE="#cb4b16", BLUE="#268bd2", MUTED="#93a1a1", INK="#586e75", HAIR="#e2dbc5";
+  const inN=$("#w2-N");
+  const Lmin=8, Lmax=96, x0=60, x1=730, y0=250, y1=30;   /* plot box */
+  const X=L=>x0+(x1-x0)*(L-Lmin)/(Lmax-Lmin);
+  const Y=v=>y0-(y0-y1)*v/Lmax;
+  let hoverL=96;
+  function kept(L,N){ return {std:1, full:L, block:Math.min(N,L)}; }   /* N-1 summaries + partial, needs >=2 layers per block */
+  function draw(){
+    const N=+inN.value; $("#w2-No").textContent=N;
+    let g="";
+    /* axes and gridlines */
+    [0,24,48,72,96].forEach(v=>{ g+='<line x1="'+x0+'" y1="'+Y(v)+'" x2="'+x1+'" y2="'+Y(v)+'" stroke="'+HAIR+'"/>'; g+='<text x="'+(x0-8)+'" y="'+(Y(v)+4)+'" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="11" fill="'+MUTED+'">'+v+'</text>'; });
+    [8,24,48,72,96].forEach(L=>{ g+='<text x="'+X(L)+'" y="'+(y0+18)+'" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="'+MUTED+'">'+L+'</text>'; });
+    g+='<text x="'+((x0+x1)/2)+'" y="'+(y0+40)+'" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="'+INK+'">depth L (layers)</text>';
+    g+='<text transform="translate(16,'+((y0+y1)/2)+') rotate(-90)" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11.5" fill="'+INK+'">vectors kept per token</text>';
+    /* lines */
+    g+='<line x1="'+X(Lmin)+'" y1="'+Y(Lmin)+'" x2="'+X(Lmax)+'" y2="'+Y(Lmax)+'" stroke="'+ORANGE+'" stroke-width="2.4"/>';
+    g+='<line x1="'+X(Lmin)+'" y1="'+Y(Math.min(N,Lmin))+'" x2="'+X(Lmax)+'" y2="'+Y(N)+'" stroke="'+BLUE+'" stroke-width="2.4"/>';
+    g+='<line x1="'+X(Lmin)+'" y1="'+Y(1)+'" x2="'+X(Lmax)+'" y2="'+Y(1)+'" stroke="'+MUTED+'" stroke-width="1.6" stroke-dasharray="4 3"/>';
+    g+='<text x="'+(X(Lmax)-6)+'" y="'+(Y(N)-8)+'" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="11" fill="'+BLUE+'">N = '+N+'</text>';
+    g+='<text x="'+(X(72))+'" y="'+(Y(72)-10)+'" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="11" fill="'+ORANGE+'">= L</text>';
+    /* hover marker */
+    const k=kept(hoverL,N);
+    g+='<line x1="'+X(hoverL)+'" y1="'+y1+'" x2="'+X(hoverL)+'" y2="'+y0+'" stroke="'+INK+'" stroke-width="1" stroke-dasharray="3 3"/>';
+    g+='<circle cx="'+X(hoverL)+'" cy="'+Y(k.full)+'" r="4.5" fill="'+ORANGE+'"/>';
+    g+='<circle cx="'+X(hoverL)+'" cy="'+Y(k.block)+'" r="4.5" fill="'+BLUE+'"/>';
+    /* capture rect */
+    g+='<rect id="w2-cap" x="'+x0+'" y="'+y1+'" width="'+(x1-x0)+'" height="'+(y0-y1)+'" fill="transparent"/>';
+    svg.innerHTML=g;
+    $("#w2-L").textContent=hoverL; $("#w2-full").textContent=k.full; $("#w2-block").textContent=k.block;
+    explain.textContent="At "+hoverL+" layers, attention residuals keep "+k.full+" vectors per token and block attention residuals keep "+k.block+". Add layers and the first number grows with them; the second does not.";
+    const cap=$("#w2-cap");
+    const onmove=ev=>{ const r=svg.getBoundingClientRect(); const px=(ev.clientX-r.left)/r.width*760; let L=Math.round(Lmin+(px-x0)/(x1-x0)*(Lmax-Lmin)); L=Math.max(Lmin,Math.min(Lmax,L)); if(L!==hoverL){hoverL=L;draw();} };
+    cap.addEventListener("mousemove",onmove);
+    cap.addEventListener("click",onmove);
+  }
+  inN.addEventListener("input",draw);
+  draw();
+})();
+
+/* ---------------- figure IIFEs go here, one per figure, in document order ----------------
+
+(function(){
+  const root=$("#wN");
+  const svg=$("#wN-svg");
+  let state="default";
+  function draw(){
+    let g="";
+    // build the SVG as a string, then assign once
+    svg.innerHTML=g;
+    $("#wN-readout").textContent=fmt(value);
+  }
+  seg(root,"data-thing",v=>{state=v;draw();});
+  draw();
+})();
+
+------------------------------------------------------------------------------------- */
+
+/* ---------------- KaTeX ---------------- */
+(function(){
+  let done=false;
+  function render(){
+    if(done||!window.katex) return;
+    done=true;
+    document.querySelectorAll("[data-tex]").forEach(function(el){
+      const tex=el.getAttribute("data-tex");
+      try{
+        /* strict:"error" so a malformed expression falls back to its plain-text
+           content instead of rendering a confidently wrong fragment */
+        katex.render(tex, el, {displayMode:el.classList.contains("math-d"), throwOnError:true, strict:"error"});
+        el.classList.add("rendered");
+      }catch(e){
+        console.warn("KaTeX failed on:", tex, e.message);
+      }
+    });
+  }
+  if(document.readyState!=="loading") render();
+  document.addEventListener("DOMContentLoaded",render);
+  window.addEventListener("load",render);
+})();
+
+/* ---------------- python highlighting for <pre><code class="py"> ---------------- */
+(function(){
+  const rx=/(#[^\n]*)|("""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|\b(\d+\.?\d*)\b|\b(import|from|as|with|for|in|if|else|elif|return|def|class|None|True|False|not|and|or|lambda|while|try|except|pass|print)\b|\b([A-Za-z_]\w*)(?=\s*\()/g;
+  const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  $$("pre code.py").forEach(el=>{
+    const src=el.textContent;
+    el.innerHTML=esc(src).replace(rx,(m,com,str,num,kw,fn)=>{
+      const c=com?"c-com":str?"c-str":num?"c-num":kw?"c-kw":"c-fn";
+      return '<span class="'+c+'">'+m+'</span>';
+    });
+  });
+})();
+
+})();
+
+</script>
