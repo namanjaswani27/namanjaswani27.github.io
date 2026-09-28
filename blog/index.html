@@ -58,13 +58,21 @@ footer a{color:var(--base00)}
 <div class="bar">
   <a href="/">namanjaswani27.github.io</a> <span>/</span> <span>blog</span>
   <span class="spacer"></span>
-  <span>3 posts</span>
+  <span>4 posts</span>
 </div>
 
 <div class="wrap">
   <h1>Blog</h1>
 
   <ul class="posts">
+    <li>
+      <h3><a href="/blog/moe-variants/">Dense layers, MoE and MMoE: what each one fixes</a></h3>
+      <p>In a dense network, every parameter gets used for every input. That gets expensive as models grow, and it causes a different problem when one model has several tasks. How MoE and MMoE deal with each.</p>
+      <div class="pmeta">
+        <span>28 September 2026</span><span>~11 min</span>
+        <span class="tag">MoE</span><span class="tag">multi-task</span><span class="tag">routing</span>
+      </div>
+    </li>
     <li>
       <h3><a href="/blog/attention-residuals/">Attention residuals: a learned weighting over layers</a></h3>
       <p>Standard residual connections add every layer's output with weight 1. Attention residuals replace this with a softmax over earlier layers, and block attention residuals keep the memory cost constant.</p>
